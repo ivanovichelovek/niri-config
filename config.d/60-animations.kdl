@@ -1,0 +1,77 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// 60 — Animations
+// ─────────────────────────────────────────────────────────────────────────────
+// Docs: https://niri-wm.github.io/niri/Configuration:-Animations
+//
+// All animations use spring physics with three parameters:
+//
+//   damping-ratio  How quickly the spring settles.
+//                  < 1.0 = underdamped (oscillates / overshoots)
+//                  = 1.0 = critically damped (fastest settle, no overshoot)
+//                  > 1.0 = overdamped (slow, sluggish stop)
+//
+//   stiffness      How "snappy" the spring is. Higher = faster movement.
+//                  300 = smooth, 600 = responsive, 900+ = near-instant.
+//
+//   epsilon        Threshold to consider the animation "done" (0.0001 is fine).
+//
+// Values below were tuned to complement Material-style shell motion
+// curves. QS uses ~500ms for main movements, ~400ms enter, ~200ms exit.
+// damping-ratio < 1 = overshoot, matching QS bezier [0.38, 1.21, 0.22, 1.00].
+//
+// You can also use duration-based easing instead of springs:
+//   duration-ms 250 curve "ease-out-expo"
+// ─────────────────────────────────────────────────────────────────────────────
+
+animations {
+    // Uncomment to disable all animations globally.
+    // off
+
+    // Slow down every animation by this factor (useful for debugging).
+    // Values below 1.0 speed them up. Default: 1.0
+    // slowdown 3.0
+
+    // ── Workspace transitions ───────────────────────────────────────────────
+    // Match QS elementMove (~500ms, expressive overshoot).
+    workspace-switch {
+        spring damping-ratio=0.78 stiffness=600 epsilon=0.0001
+    }
+
+    // ── Window lifecycle ────────────────────────────────────────────────────
+    // Match QS elementMoveEnter (~400ms, emphasized decel).
+    window-open {
+        spring damping-ratio=0.82 stiffness=500 epsilon=0.0001
+    }
+
+    // Match QS elementMoveExit (~200ms, quick accel out).
+    window-close {
+        spring damping-ratio=0.88 stiffness=900 epsilon=0.0001
+    }
+
+    // ── Layout movement ─────────────────────────────────────────────────────
+    // Scrolling the horizontal strip when you focus a different column.
+    horizontal-view-movement {
+        spring damping-ratio=0.80 stiffness=550 epsilon=0.0001
+    }
+
+    // Dragging or moving a window between columns/workspaces.
+    window-movement {
+        spring damping-ratio=0.85 stiffness=650 epsilon=0.0001
+    }
+
+    // Interactive column/window resize. Match QS elementResize (~300ms).
+    window-resize {
+        spring damping-ratio=0.88 stiffness=700 epsilon=0.0001
+    }
+
+    // ── UI chrome ───────────────────────────────────────────────────────────
+    // The "config saved" toast that appears after editing this file.
+    config-notification-open-close {
+        spring damping-ratio=0.90 stiffness=800 epsilon=0.0001
+    }
+
+    // Niri's built-in screenshot UI opening.
+    screenshot-ui-open {
+        spring damping-ratio=0.85 stiffness=750 epsilon=0.0001
+    }
+}

@@ -1,0 +1,35 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// 40 — Environment variables
+// ─────────────────────────────────────────────────────────────────────────────
+// These are set for every process spawned by Niri (including spawn-at-startup
+// and keybind commands). They are NOT inherited by TTY/SSH sessions — put
+// equivalent exports in ~/.bashrc / fish conf.d if you need them there.
+// ─────────────────────────────────────────────────────────────────────────────
+
+environment {
+    // Tell apps which compositor is running (used by xdg-desktop-portal, etc.).
+    XDG_CURRENT_DESKTOP "niri"
+
+    // Use Plasma's app-menu prefix so kbuildsycoca6 indexes .desktop files
+    // and Dolphin/Nautilus "Open With" menus work correctly.
+    XDG_MENU_PREFIX "plasma-"
+
+    // Force Qt apps to use Wayland natively (no XWayland fallback).
+    QT_QPA_PLATFORM "wayland"
+
+    // Let Electron apps (Chrome, VS Code, Discord) pick Wayland automatically.
+    ELECTRON_OZONE_PLATFORM_HINT "auto"
+
+    // Qt theming: "kde" reads colors from kdeglobals (requires plasma-integration).
+    // Without plasma-integration installed, use "qt6ct" instead.
+    QT_QPA_PLATFORMTHEME "kde"
+
+    // Darkly is a modern Qt style that follows kdeglobals color schemes.
+    QT_STYLE_OVERRIDE "Darkly"
+
+    // Dropped when moving off iNiR — these were Quickshell/illogical-impulse only:
+    //   QT_LOGGING_RULES "quickshell.dbus.properties=false"
+    //   INIR_VENV "$HOME/.local/state/quickshell/.venv"
+    //   ILLOGICAL_IMPULSE_VIRTUAL_ENV "$HOME/.local/state/quickshell/.venv"
+    // Noctalia is not a Qt app and ships no Python venv; it has no equivalents.
+}

@@ -1,0 +1,39 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// 50 — Processes spawned at login
+// ─────────────────────────────────────────────────────────────────────────────
+// Each line runs once when Niri starts. For daemons that support it,
+// xdg-desktop-autostart (systemd) is an alternative.
+//
+// Tip: use spawn-sh-at-startup for shell pipelines or variable expansion.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Shell ───────────────────────────────────────────────────────────────────
+// Noctalia in daemon mode. Start it exactly once: if you also enable a systemd
+// user unit for it you will get two shells fighting over the same D-Bus names.
+spawn-at-startup "noctalia" "-d"
+
+// Export XDG_MENU_PREFIX into the systemd user session and rebuild the
+// sycoca database so KDE/Qt apps see the correct .desktop entries.
+spawn-at-startup "bash" "-c" "systemctl --user import-environment XDG_MENU_PREFIX && kbuildsycoca6"
+
+// Clipboard history: wl-paste watches the clipboard and cliphist stores it.
+// Type-specific watchers prevent duplicate entries (browsers offer both
+// text/html and text/plain — without --type, cliphist stores both).
+//
+// NOTE: Noctalia keeps its own clipboard history (~/.local/state/noctalia/clipboard)
+// and its panel (Mod+V) reads that, not cliphist. Keep these lines only if you
+// still use cliphist from the terminal or other tools; otherwise delete them.
+spawn-at-startup "bash" "-c" "wl-paste --type text --watch cliphist store &"
+spawn-at-startup "bash" "-c" "wl-paste --type image --watch cliphist store &"
+
+// Polkit authentication agent — needed for GUI sudo prompts (software install,
+// disk mount, etc.).
+//
+// NOTE: Noctalia has a built-in polkit panel (`noctalia msg panel-open polkit`).
+// If it handles your prompts, this external agent is redundant — verify once on
+// the new system (try a GUI action that needs root) and drop this line if so.
+spawn-at-startup "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1"
+
+// Dropped when moving off iNiR:
+//   - inir.service (the Quickshell shell) — replaced by noctalia above
+//   - awww-daemon (wallpaper) — Noctalia renders its own wallpaper surface

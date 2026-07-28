@@ -1,0 +1,45 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// 80 — Layer rules
+// ─────────────────────────────────────────────────────────────────────────────
+// Docs: https://niri-wm.github.io/niri/Configuration:-Layer-Rules
+//
+// Layer-shell surfaces are used by bars, panels, wallpaper renderers and
+// overlays. List the live ones with `niri msg layers`.
+//
+// place-within-backdrop = true tells Niri to render a background-layer surface
+// behind windows but above the compositor background, so the shell's wallpaper
+// shows through in the overview instead of a flat colour.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Noctalia's wallpaper surface (background layer).
+layer-rule {
+    match namespace="noctalia-wallpaper"
+    place-within-backdrop true
+    opacity 1.0
+}
+
+// Namespaces observed live via `niri msg layers` with Noctalia running:
+//   noctalia-wallpaper     background layer
+//   noctalia-bar-default   top layer  (one per bar; name follows [bar] order)
+// Panels (launcher, control-center, clipboard, session…) were closed at the
+// time, so their namespaces are unknown. Open one and re-run `niri msg layers`
+// before writing a rule for it — don't guess the name.
+//
+// Replaced from the iNiR config, which matched:
+//   quickshell:iiBackdrop   ("ii" panel family backdrop)
+//   quickshell:wBackdrop    ("waffle" panel family backdrop)
+// Noctalia has no panel families and its [backdrop] section is disabled by
+// default, so there is no successor rule for those two.
+
+// ── Examples ────────────────────────────────────────────────────────────────
+// Make a specific layer surface semi-transparent:
+// layer-rule {
+//     match namespace="noctalia-bar-default"
+//     opacity 0.9
+// }
+//
+// Block a layer surface from screen capture:
+// layer-rule {
+//     match namespace="some-private-overlay"
+//     block-out-from "screencast"
+// }

@@ -1,0 +1,9 @@
+#!/usr/bin/bash
+# Lock the screen, then suspend. Bound to Mod+Alt+Shift+L in 70-binds.kdl.
+
+noctalia msg session lock
+sleep 1
+systemctl suspend
+# systemctl suspend blocks until resume — restart wlsunset here to prevent
+# gamma stacking (AMD DCN doesn't reset KMS gamma LUT on S3 resume)
+"$HOME/.local/bin/wlsunset-restart"

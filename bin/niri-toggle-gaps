@@ -1,0 +1,28 @@
+#!/bin/bash
+# Focus mode: strip gaps, corner radius and inactive-window opacity, and hide
+# the shell bar. Bound to Mod+Shift+F in 90-user-extra.kdl.
+#
+# Edits the live config files in place, so it follows ~/.config/niri wherever
+# that points.
+LAYOUT="$HOME/.config/niri/config.d/20-layout-and-overview.kdl"
+RULES="$HOME/.config/niri/config.d/30-window-rules.kdl"
+
+if grep -qE '^\s+gaps 0\b' "$LAYOUT"; then
+    # Exit focus mode
+    sed -i -E 's/^(\s+)gaps 0\b/\1gaps 25/' "$LAYOUT"
+    sed -i -E 's/^(\s*)(\/\/\s*|\/-)always-center-single-column/\1always-center-single-column/' "$LAYOUT"
+    sed -i -E 's/^(\s+)geometry-corner-radius 0\b/\1geometry-corner-radius 16/' "$RULES"
+    sed -i -E 's/^(\s+)opacity 1\.0\b/\1opacity 0.9/' "$RULES"
+    niri msg action load-config-file
+    # Was: systemctl --user start inir  (restarted the whole iNiR shell)
+    noctalia msg bar-show
+else
+    # Enter focus mode
+    sed -i -E 's/^(\s+)gaps [0-9]+\b/\1gaps 0/' "$LAYOUT"
+    sed -i -E 's/^(\s*)always-center-single-column/\1\/\/ always-center-single-column/' "$LAYOUT"
+    sed -i -E 's/^(\s+)geometry-corner-radius [0-9]+\b/\1geometry-corner-radius 0/' "$RULES"
+    sed -i -E 's/^(\s+)opacity 0\.9\b/\1opacity 1.0/' "$RULES"
+    # Was: systemctl --user stop inir  (killed the shell to hide its panel)
+    noctalia msg bar-hide
+    niri msg action load-config-file
+fi

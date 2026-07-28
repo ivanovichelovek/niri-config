@@ -1,0 +1,128 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// 90 — Your personal overrides
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// This file is YOURS — personal overrides, kept across shell changes.
+// Put any custom configuration here: extra binds, per-app window rules,
+// output configuration, named workspaces, etc.
+//
+// Since Niri evaluates config top-to-bottom, settings here take effect
+// after all other config.d files. For window-rule properties, all matching
+// rules accumulate. For scalar values (like gaps), the last one wins.
+//
+// Examples:
+//
+// Disable the touchpad while the nvim window (app-id="nvim") is focused.
+// Daemon takes an exclusive EVIOCGRAB on the touchpad; fail-open (releases on
+// exit, so it can never lock you out). Source: ~/.local/bin/niri-nvim-touchpad
+spawn-at-startup "/home/ivanc/.local/bin/niri-nvim-touchpad"
+
+// Named workspaces (sticky, always present)
+workspace "term"
+workspace "web"
+workspace "chat"
+workspace "code"
+workspace "music"
+workspace "vpn"
+//
+// Per-app workspace assignment
+
+// terminal (kitty)
+window-rule {
+    match app-id="kitty"
+    exclude title=r"^remind-"
+    open-on-workspace "term"
+}
+
+// browser (zen)
+window-rule {
+    match app-id="zen"
+    open-on-workspace "web"
+    open-maximized true
+}
+
+// chat (ayugram)
+window-rule {
+    match app-id="com.ayugram.desktop"
+    open-on-workspace "chat"
+    open-maximized true
+}
+
+// nvim opens kitty with --class nvim, so app-id is "nvim"
+window-rule {
+    match app-id="nvim"
+    open-on-workspace "code"
+    open-maximized true
+}
+
+// music (yandex)
+window-rule {
+    match app-id="YandexMusic"
+    open-on-workspace "music"
+    open-maximized true
+}
+
+// vpn (nekobox)
+window-rule {
+    match app-id="nekobox"
+    open-on-workspace "vpn"
+    open-maximized true
+}
+
+// VirtualBox: open manager and VM windows maximized.
+// Matches both "VirtualBox Manager" and "VirtualBox Machine".
+window-rule {
+    match app-id=r#"^VirtualBox "#
+    open-maximized true
+}
+
+
+// ── Todoist reminders ────────────────────────────────────────────────────────
+window-rule {
+    match title=r"^remind-"
+    open-floating true
+}
+
+binds {
+    // ═══════════════════════════════════════════════════════════════════════
+    // Tools
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // Reminder list, add, delete — floating kitty windows.
+    Mod+N repeat=false hotkey-overlay-title="Reminder list" { spawn "kitty" "--title" "remind-list" "--hold" "fish" "-c" "source $HOME/.local/share/todoist-remind/cli/remind_list.fish"; }
+    Mod+Ctrl+N repeat=false hotkey-overlay-title="Add reminder" { spawn "kitty" "--title" "remind-add" "--hold" "fish" "-c" "source $HOME/.local/share/todoist-remind/cli/remind_add.fish"; }
+    Mod+Ctrl+D repeat=false hotkey-overlay-title="Delete reminder" { spawn "kitty" "--title" "remind-del" "--hold" "fish" "-c" "source $HOME/.local/share/todoist-remind/cli/remind_del.fish"; }
+
+    // Focus mode: remove gaps, corner radius and hide the shell bar.
+    Mod+Shift+F repeat=false hotkey-overlay-title="Focus mode" { spawn "/home/ivanc/.local/bin/niri-toggle-gaps"; }
+}
+
+//   window-rule {
+//       match app-id="firefox"
+//       open-on-workspace "browser"
+//   }
+//
+//   // Extra keybind
+//   binds {
+//       Mod+P { spawn "rofi" "-show" "drun"; }
+//   }
+//
+//   // Output config for your specific monitor
+//   output "DP-1" {
+//       mode "3440x1440@100.000"
+//       scale 1
+//       position x=0 y=0
+//   }
+// ─────────────────────────────────────────────────────────────────────────────
+
+output "eDP-1" {
+    position x=0 y=0
+}
+
+output "DP-1" {
+    position x=1920 y=0
+}
+
+output "HDMI-A-1" {
+    position x=4480 y=0
+}
