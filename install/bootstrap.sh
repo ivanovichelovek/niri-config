@@ -40,11 +40,18 @@ while [[ $# -gt 0 ]]; do
         --skip-aur)     SKIP_AUR=1; shift ;;
         --skip-greeter) SKIP_GREETER=1; shift ;;
         --skip-link)    SKIP_LINK=1; shift ;;
-        --greeter)      GREETER=$2; shift 2 ;;
+        --greeter)      GREETER=${2:?--greeter needs a value}; shift 2 ;;
         -h|--help)      usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage; exit 1 ;;
     esac
 done
+
+# Validate up front — otherwise a typo here is only caught after every package
+# is installed and the login shell has already been changed.
+case $GREETER in
+    regreet|noctalia|tuigreet|none) ;;
+    *) echo "unknown greeter: $GREETER (regreet|noctalia|tuigreet|none)" >&2; exit 1 ;;
+esac
 
 # ─── preconditions ──────────────────────────────────────────────────────────
 [[ $EUID -eq 0 ]] || { echo "run this with sudo: sudo $0" >&2; exit 1; }
@@ -80,11 +87,30 @@ echo "greeter: $([[ $SKIP_GREETER == 1 ]] && echo "skipped" || echo "$GREETER")"
 step "Official packages"
 
 PKGS=(
+    # ── drivers / firmware for this machine ─────────────────────────────────
+    # Ryzen 7 5800U (Cezanne). Microcode is NOT part of base — without it the
+    # CPU runs on shipped-in-silicon errata. GRUB is regenerated below so the
+    # microcode image is actually loaded.
+    amd-ucode
+    # GPU: integrated Radeon Vega (amdgpu). A base install has no GPU userspace.
+    # On Intel swap vulkan-radeon -> vulkan-intel; on NVIDIA use
+    # nvidia-open-dkms + egl-wayland instead.
+    mesa vulkan-radeon
+    # Audio: AMD Renoir/Cezanne HD Audio + Audio Coprocessor.
+    sof-firmware alsa-ucm-conf
+    # Ethernet (Realtek RTL8111, r8169), Wi-Fi (RTL8822CE, rtw88) and the
+    # RTL8822CE bluetooth radio are all in-kernel; their firmware comes from
+    # linux-firmware, which the base install already has.
+    #
+    # Laptop power profiles — also an optional dependency of noctalia.
+    power-profiles-daemon
+    # Not installed by default: fprintd (FocalTech 2808:c652 fingerprint
+    # reader). Support for that model is patchy — install it yourself if wanted.
     # compositor + session
     niri xdg-desktop-portal-gtk xdg-desktop-portal-gnome polkit-gnome
     xdg-user-dirs qt6-wayland
-    # shell + terminal + editor
-    fish kitty neovim micro
+    # shell + terminal + editor (starship and eza are used by dots/fish)
+    fish kitty neovim micro starship eza
     # noctalia runtime deps that live in the official repos
     imagemagick brightnessctl ffmpeg wlr-randr python libqalculate
     # apps
@@ -101,6 +127,15 @@ PKGS=(
 
 pacman -Syu --needed --noconfirm "${PKGS[@]}"
 
+# amd-ucode only takes effect once it is referenced from the boot entry.
+if command -v grub-mkconfig >/dev/null && [[ -d /boot/grub ]]; then
+    step "Regenerating GRUB config (picks up amd-ucode)"
+    grub-mkconfig -o /boot/grub/grub.cfg
+else
+    warn "GRUB not found — microcode will not load until your bootloader references it"
+    TODO+=("add the amd-ucode initrd to your boot entry")
+fi
+
 # ─── AUR ────────────────────────────────────────────────────────────────────
 AUR_PKGS=(
     noctalia-git        # the shell (v5, native C++ — does NOT need quickshell)
@@ -115,14 +150,19 @@ if [[ $SKIP_AUR == 1 ]]; then
     TODO+=("install AUR packages later: yay -S ${AUR_PKGS[*]}")
 else
     step "AUR helper (yay)"
-    if as_user command -v yay >/dev/null 2>&1; then
+    # NOTE: `command` is a shell builtin, so `sudo -u user command -v yay` always
+    # fails. Check as root instead — /usr/bin is on root's PATH too.
+    if command -v yay >/dev/null 2>&1; then
         info "yay already present"
     else
         BUILD_DIR=$(as_user mktemp -d)
         as_user git clone --depth 1 https://aur.archlinux.org/yay-bin.git "$BUILD_DIR/yay-bin"
-        # makepkg -si needs to escalate for pacman itself; the invoking user is
-        # already in sudoers or this script wouldn't be running.
-        ( cd "$BUILD_DIR/yay-bin" && as_user makepkg -si --noconfirm )
+        # Build as the user (makepkg refuses to run as root), then install as
+        # root ourselves. Using `makepkg -si` would make makepkg call `sudo
+        # pacman` from inside a sudo session, which can block on a password
+        # prompt if the timestamp expires during a long build.
+        ( cd "$BUILD_DIR/yay-bin" && as_user makepkg -s --noconfirm )
+        pacman -U --noconfirm "$BUILD_DIR"/yay-bin/yay-bin-*.pkg.tar.*
         rm -rf "$BUILD_DIR"
     fi
 
@@ -197,6 +237,28 @@ else
     fi
 
     as_user mkdir -p "$USER_HOME/Pictures/Wallpapers" "$USER_HOME/Pictures/Screenshots"
+
+    step "fish config"
+    FISH_CFG="$USER_HOME/.config/fish"
+    if [[ -e $FISH_CFG && ! -L $FISH_CFG ]]; then
+        BACKUP="$FISH_CFG.bak.$(date +%Y%m%d%H%M%S)"
+        warn "$FISH_CFG exists — moving it to $BACKUP"
+        as_user mv "$FISH_CFG" "$BACKUP"
+    elif [[ -L $FISH_CFG ]]; then
+        rm -f "$FISH_CFG"
+    fi
+    as_user ln -s "$REPO_ROOT/dots/fish" "$FISH_CFG"
+    info "$FISH_CFG -> $REPO_ROOT/dots/fish"
+
+    # Secrets are deliberately not in the repo.
+    if [[ ! -f $REPO_ROOT/dots/fish/conf.d/secrets.fish ]]; then
+        info "no secrets.fish — copy conf.d/secrets.fish.example if you need API keys"
+        TODO+=("create ~/.config/fish/conf.d/secrets.fish from the .example (gitignored)")
+    fi
+
+    # fish_variables references fisher; the plugin manager itself is not a
+    # pacman package and installs from inside fish.
+    TODO+=("optional: install fisher — curl -sL https://git.io/fisher | source && fisher update")
 fi
 
 # ─── greeter ────────────────────────────────────────────────────────────────
@@ -212,24 +274,38 @@ else
         pacman -S --needed --noconfirm greetd greetd-regreet cage
 
         install -d -m 0755 /etc/greetd
-        cat >/etc/greetd/config.toml <<EOF
+        cat >/etc/greetd/config.toml <<'EOF'
 [terminal]
 vt = 1
 
 [default_session]
-command = "cage -s -mlast -- regreet"
+command = "cage -s -- regreet"
 user = "greeter"
 EOF
-        cat >/etc/greetd/regreet.toml <<EOF
-[background]
-path = "/usr/share/noctalia/assets/noctalia-wallpaper.png"
-fit = "Cover"
+        # regreet writes its state here; the package does not always create it.
+        if getent passwd greeter >/dev/null; then
+            install -d -o greeter -g greeter -m 0755 /var/cache/regreet /var/log/regreet
+        else
+            warn "user 'greeter' does not exist — greetd package may have failed"
+            TODO+=("check that greetd created the 'greeter' user")
+        fi
 
-[GTK]
-application_prefer_dark_theme = true
-cursor_theme_name = "Adwaita"
-EOF
-        info "wallpaper: /etc/greetd/regreet.toml -> [background] path"
+        # Only point at a wallpaper that actually exists, otherwise regreet
+        # logs an error on every boot.
+        WALL=/usr/share/noctalia/assets/noctalia-wallpaper.png
+        {
+            if [[ -f $WALL ]]; then
+                printf '[background]\npath = "%s"\nfit = "Cover"\n\n' "$WALL"
+            fi
+            printf '[GTK]\napplication_prefer_dark_theme = true\ncursor_theme_name = "Adwaita"\n'
+        } >/etc/greetd/regreet.toml
+
+        if [[ -f $WALL ]]; then
+            info "wallpaper: $WALL (change it in /etc/greetd/regreet.toml)"
+        else
+            warn "no wallpaper set — noctalia assets not found (installed with --skip-aur?)"
+            TODO+=("set [background] path in /etc/greetd/regreet.toml")
+        fi
         ;;
     tuigreet)
         pacman -S --needed --noconfirm greetd greetd-tuigreet

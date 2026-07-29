@@ -57,6 +57,28 @@ The two files carrying the app automation — `30-window-rules.kdl` and
 Noctalia has no equivalent for them and never will: it is a layer-shell client
 and does not manage windows.
 
+## fish
+
+`dots/fish` is the shell config; `bootstrap.sh` symlinks it to `~/.config/fish`.
+Needs `starship` and `eza`, both installed by the script.
+
+**Secrets are not in this repo.** `config.fish` sources
+`~/.config/fish/conf.d/secrets.fish`, which is gitignored — copy
+`dots/fish/conf.d/secrets.fish.example` and fill it in. Never put a key in a
+tracked file; removing it in a later commit does not remove it from history.
+
+## Hardware
+
+The driver list in `bootstrap.sh` targets a Ryzen 7 5800U laptop: `amd-ucode`
+(microcode is *not* part of `base`), `mesa` + `vulkan-radeon` for the integrated
+Vega, `sof-firmware` + `alsa-ucm-conf` for the Renoir/Cezanne audio coprocessor.
+Ethernet (RTL8111), Wi-Fi (RTL8822CE) and its bluetooth radio are in-kernel and
+covered by `linux-firmware`. GRUB is regenerated after install so the microcode
+image is actually loaded.
+
+On other hardware, edit the block at the top of `PKGS`: `vulkan-intel` for Intel,
+`nvidia-open-dkms` + `egl-wayland` for NVIDIA.
+
 ## Workspaces
 
 Six named workspaces, always present, with apps assigned on open:
