@@ -6,8 +6,19 @@ shell. No dependency on iNiR, illogical-impulse or Quickshell remains.
 
 ## Install
 
+On a clean Arch system, `install/bootstrap.sh` does all of this for you —
+packages, AUR helper, fish as login shell, greeter, symlinks:
+
 ```fish
-git clone <this-repo> ~/GitHub/niri-config
+git clone git@github.com:ivanovichelovek/niri-config.git ~/GitHub/niri-config
+cd ~/GitHub/niri-config
+sudo ./install/bootstrap.sh
+```
+
+By hand instead:
+
+```fish
+git clone git@github.com:ivanovichelovek/niri-config.git ~/GitHub/niri-config
 ln -s ~/GitHub/niri-config ~/.config/niri
 
 # helper scripts referenced by binds
@@ -18,9 +29,14 @@ ln -s ~/GitHub/niri-config/bin/niri-toggle-gaps  ~/.local/bin/
 niri validate            # should print "config is valid"
 ```
 
-Requires: `niri`, `noctalia`, `kitty`, `zen-browser`, `nautilus`, `cliphist`,
-`wl-clipboard`, and a polkit agent. `wlsunset-restart` is referenced by
-`bin/lock-and-suspend` and is not included here.
+Requires: `niri`, `noctalia`, `kitty`, `fish`, `zen-browser`, `google-chrome`,
+`telegram-desktop`, `yandex-music`, `happ-desktop-bin`, `nautilus`, `cliphist`,
+`wl-clipboard`, and a polkit agent — `bootstrap.sh` installs all of them.
+
+Not included here and referenced by the config: `wlsunset-restart` (used by
+`bin/lock-and-suspend`) and `niri-nvim-touchpad` (spawned by
+`config.d/90-user-extra.kdl`). Both come from the old dotfiles; the bootstrap
+script warns if the second one is missing.
 
 ## Layout
 
@@ -48,13 +64,19 @@ Six named workspaces, always present, with apps assigned on open:
 | workspace | app | `app-id` |
 |---|---|---|
 | `term` | kitty | `kitty` (excluding `remind-*` titles) |
-| `web` | Zen | `zen` |
-| `chat` | AyuGram | `com.ayugram.desktop` |
+| `web` | Zen | `^zen(-browser)?$` |
+| `web` | Google Chrome | `google-chrome` |
+| `chat` | Telegram | `org.telegram.desktop` |
 | `code` | Neovim | `nvim` (kitty `--class nvim`) |
 | `music` | Yandex Music | `YandexMusic` |
-| `vpn` | Nekobox | `nekobox` |
+| `vpn` | Happ | `(?i)^happ$` — **unverified**, see below |
 
 All except the terminal open maximized. `Mod+1`…`Mod+6` focus them in that order.
+
+Every app-id above was read off the installed `.desktop` file except **Happ**:
+`happ-desktop-bin` ships none (its binary is `/opt/happ/bin/Happ`), so the rule
+is a case-insensitive guess. Confirm with `niri msg windows` once it's running
+and pin the exact value.
 
 ## Shell binds
 
