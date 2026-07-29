@@ -34,16 +34,24 @@ window-rule {
     open-on-workspace "term"
 }
 
-// browser (zen)
+// browser (zen) — regex covers both "zen" and "zen-browser" app-ids,
+// since the AUR build and the manual /opt install differ.
 window-rule {
-    match app-id="zen"
+    match app-id=r#"^zen(-browser)?$"#
     open-on-workspace "web"
     open-maximized true
 }
 
-// chat (ayugram)
+// second browser (google chrome)
 window-rule {
-    match app-id="com.ayugram.desktop"
+    match app-id=r#"^google-chrome$"#
+    open-on-workspace "web"
+    open-maximized true
+}
+
+// chat (telegram) — official client; app-id from org.telegram.desktop.desktop
+window-rule {
+    match app-id="org.telegram.desktop"
     open-on-workspace "chat"
     open-maximized true
 }
@@ -62,9 +70,11 @@ window-rule {
     open-maximized true
 }
 
-// vpn (nekobox)
+// vpn (happ) — app-id NOT verified: happ-desktop-bin ships no .desktop file,
+// its binary is /opt/happ/bin/Happ. Case-insensitive match as a best guess.
+// Confirm on the new system with `niri msg windows` and pin it exactly.
 window-rule {
-    match app-id="nekobox"
+    match app-id=r#"(?i)^happ$"#
     open-on-workspace "vpn"
     open-maximized true
 }
