@@ -203,10 +203,20 @@ screen. Delete that file when moving to real hardware.
 
 The driver list in `bootstrap.sh` targets a Ryzen 7 5800U laptop: `amd-ucode`
 (microcode is *not* part of `base`), `mesa` + `vulkan-radeon` for the integrated
-Vega, `sof-firmware` + `alsa-ucm-conf` for the Renoir/Cezanne audio coprocessor.
-Ethernet (RTL8111), Wi-Fi (RTL8822CE) and its bluetooth radio are in-kernel and
-covered by `linux-firmware`. GRUB is regenerated after install so the microcode
-image is actually loaded.
+Vega, `alsa-ucm-conf` for audio. Ethernet (RTL8111), Wi-Fi (RTL8822CE) and its
+bluetooth radio are in-kernel and covered by `linux-firmware`. GRUB is
+regenerated after install so the microcode image is actually loaded.
+
+`sof-firmware` is deliberately absent. On this machine sound runs through
+`snd_hda_intel`, and the Audio Coprocessor at `04:00.5` has no driver bound;
+installing SOF firmware can make the kernel bind `snd_sof_amd_renoir` and move
+audio onto a different path. Add it only if the speakers or internal mic are
+actually dead.
+
+47 of the 52 packages in `PKGS` are installed and working on the target laptop
+today. The five that are not: `amd-ucode`, `power-profiles-daemon`,
+`wlr-randr`, `telegram-desktop` — all additive — and `sof-firmware`, now
+removed.
 
 On other hardware, edit the block at the top of `PKGS`: `vulkan-intel` for Intel,
 `nvidia-open-dkms` + `egl-wayland` for NVIDIA.

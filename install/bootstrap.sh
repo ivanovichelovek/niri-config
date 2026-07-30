@@ -113,8 +113,13 @@ PKGS=(
     # On Intel swap vulkan-radeon -> vulkan-intel; on NVIDIA use
     # nvidia-open-dkms + egl-wayland instead.
     mesa vulkan-radeon
-    # Audio: AMD Renoir/Cezanne HD Audio + Audio Coprocessor.
-    sof-firmware alsa-ucm-conf
+    # Audio. alsa-ucm-conf only, deliberately NOT sof-firmware: on this laptop
+    # sound runs through snd_hda_intel and the Audio Coprocessor at 04:00.5 has
+    # no driver bound at all. Installing sof-firmware can make the kernel bind
+    # snd_sof_amd_renoir to it and move audio onto the SOF path, which is a way
+    # to break working sound rather than fix anything. Install it only if the
+    # internal mic or speakers turn out to be dead.
+    alsa-ucm-conf
     # Ethernet (Realtek RTL8111, r8169), Wi-Fi (RTL8822CE, rtw88) and the
     # RTL8822CE bluetooth radio are all in-kernel; their firmware comes from
     # linux-firmware, which the base install already has.
