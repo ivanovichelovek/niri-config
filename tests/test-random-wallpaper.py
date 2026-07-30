@@ -113,13 +113,15 @@ for label, key, _ in rw.SOURCES:
 
 check("SAVE_DIR created on demand", rw.SAVE_DIR.is_dir())
 
-# ── konachan is safe-only, and says so rather than fetching an empty page ───
+# ── konachan above Safe: konachan.com, which some routes redirect away ──────
+# Either outcome is correct; what must not happen is a silent empty result.
 for rating in ("sketchy", "nsfw"):
     try:
-        rw.pick_konachan(dict(rw.DEFAULTS, rating=rating))
-        check(f"konachan refuses {rating}", False)
+        meta = rw.pick_konachan(dict(rw.DEFAULTS, rating=rating, minimum=""))
+        check(f"konachan {rating} returned a post", meta["url"].startswith("http"))
     except rw.FetchError as exc:
-        check(f"konachan refuses {rating}", "Wallhaven" in str(exc))
+        check(f"konachan {rating} explains the empty result",
+              "Wallhaven" in str(exc) or "page" in str(exc))
 
 # wallhaven sketchy needs no key; 18+ does, and the API silently drops nsfw
 # results without one rather than erroring — hence the explicit gate above.

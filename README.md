@@ -100,12 +100,12 @@ Konachan has no server-side size filter, so it fetches 40 candidates from a
 random page and picks one that fits locally. Wallhaven filters server-side via
 `ratios` and `atleast`.
 
-**Ratings above Safe are Wallhaven-only.** `konachan.com` answers `302` with
-`location: https://konachan.net/` for every request, and searching `.net` for
-`rating:questionable` returns "Nobody here but us chickens" in the HTML as well
-as an empty array from the API — the posts are not gated, they are not indexed
-there. Picking Sketchy or 18+ with Konachan selected says so instead of
-fetching a page that can only come back empty.
+Above Safe, Konachan uses `konachan.com`. What that host serves depends on the
+route: from some networks it answers `302` with
+`location: https://konachan.net/`, and `.net` indexes safe posts only, so the
+search comes back empty — a VPN changes the outcome. The request is made either
+way, and the empty case says which of the two happened rather than failing
+blankly.
 
 Wallhaven serves Sketchy without an account. For 18+ it needs an API key —
 put it in Filters or set `WALLHAVEN_API_KEY` (fish's gitignored `secrets.fish`

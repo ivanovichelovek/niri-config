@@ -155,26 +155,35 @@ def _fits(prefs, width, height):
 
 
 def pick_konachan(prefs):
-    """Konachan is a safe-only source. konachan.com answers 302 to konachan.net
-    for every request, and .net returns an empty list for rating:questionable
-    and rating:explicit — the content is not gated, it is not there. So say so
-    rather than fetching a page that can only come back empty.
+    """Safe posts come from konachan.net; anything above Safe needs konachan.com.
+
+    What .com serves depends on where you connect from — on some routes it
+    answers 302 to konachan.net, which indexes safe posts only, so a non-safe
+    search comes back empty. The request is made either way and the empty case
+    explains itself, rather than being refused up front.
 
     The API has no random endpoint, so we jump to a random page and filter
     locally — hence limit=40 rather than 1.
     """
-    if prefs["rating"] != "safe":
-        raise FetchError(
-            "Konachan only carries safe-rated posts. Switch the source to "
-            "Wallhaven for anything above Safe."
-        )
+    host = "konachan.net" if prefs["rating"] == "safe" else "konachan.com"
+    tags = {
+        "safe": "rating:safe",
+        "sketchy": "rating:questionable",
+        "nsfw": "rating:explicit",
+    }[prefs["rating"]]
 
     page = random.randint(1, 200)
     url = (
-        f"https://konachan.net/post.json?tags={urllib.parse.quote('rating:safe')}"
+        f"https://{host}/post.json?tags={urllib.parse.quote(tags)}"
         f"&limit=40&page={page}"
     )
     posts = _get_json(url)
+    if not posts and prefs["rating"] != "safe":
+        raise FetchError(
+            f"konachan.com returned nothing for {tags}. From some networks it "
+            "answers 302 to konachan.net, which indexes safe posts only — a VPN "
+            "changes what you get. Wallhaven is the reliable source above Safe."
+        )
     if not posts:
         raise FetchError(f"konachan page {page} came back empty — try again")
 
@@ -195,7 +204,7 @@ def pick_konachan(prefs):
         "name": f"konachan-{post.get('id', 'x')}",
         "width": post.get("width"),
         "height": post.get("height"),
-        "credit": post.get("author") or "konachan.net",
+        "credit": post.get("author") or host,
         "source": "Konachan",
     }
 
@@ -565,8 +574,8 @@ class Settings(Gtk.Window):
             )
         elif rating != "safe" and source == "konachan":
             self.rating_hint.set_text(
-                "Konachan carries safe-rated posts only — pick Wallhaven for "
-                "Sketchy or 18+."
+                "Above Safe, Konachan uses konachan.com — which some networks "
+                "redirect to the safe-only mirror. Wallhaven always works."
             )
         else:
             self.rating_hint.set_text("")
