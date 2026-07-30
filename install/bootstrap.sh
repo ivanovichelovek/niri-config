@@ -266,10 +266,17 @@ else
     info "app icons linked into ~/.local/share/icons"
 
     # The config was written on a machine where $HOME was /home/ivanc. Rewrite
-    # any absolute paths so it works for whoever is installing it.
+    # any absolute paths so it works for whoever is installing it. dots/ is
+    # included: noctalia's settings.toml points at wallpapers by absolute path,
+    # Happ's routing.json at an asset directory, and gp8.fish at a wine prefix.
+    #
+    # This edits tracked files, so `git status` in the repo will show them as
+    # modified afterwards. That is expected on a machine with a different
+    # username, and there is nothing to commit back.
     if [[ $USER_HOME != /home/ivanc ]]; then
         mapfile -t HARDCODED < <(grep -rl "/home/ivanc" "$REPO_ROOT/config.kdl" \
-            "$REPO_ROOT/config.d" "$REPO_ROOT/share" 2>/dev/null || true)
+            "$REPO_ROOT/config.d" "$REPO_ROOT/share" "$REPO_ROOT/dots" \
+            "$REPO_ROOT/bin" 2>/dev/null || true)
         if [[ ${#HARDCODED[@]} -gt 0 ]]; then
             as_user sed -i "s|/home/ivanc|$USER_HOME|g" "${HARDCODED[@]}"
             info "rewrote /home/ivanc -> $USER_HOME in ${#HARDCODED[@]} file(s)"
@@ -350,18 +357,29 @@ else
 
     # noctalia keeps its state here, not in ~/.config/noctalia (which stays
     # empty unless you add user overrides).
+    # `cp -n` exits 0 whether or not it copied, so test first rather than
+    # reporting from its status.
     as_user mkdir -p "$USER_HOME/.local/state/noctalia"
-    as_user cp -n "$REPO_ROOT/dots/noctalia/settings.toml" \
-                  "$USER_HOME/.local/state/noctalia/settings.toml" 2>/dev/null \
-        && info "noctalia settings seeded" \
-        || info "noctalia settings already present — left alone"
+    NOCTALIA_SETTINGS="$USER_HOME/.local/state/noctalia/settings.toml"
+    if [[ -f $NOCTALIA_SETTINGS ]]; then
+        info "noctalia settings already present — left alone"
+    else
+        as_user cp "$REPO_ROOT/dots/noctalia/settings.toml" "$NOCTALIA_SETTINGS"
+        info "noctalia settings seeded"
+    fi
 
     # Happ: the sing-box config and the routing rules only. subs.db holds the
     # server subscriptions — credentials — and is gitignored, so it has to be
     # re-added by hand from the app.
     as_user mkdir -p "$USER_HOME/.config/Happ"
-    as_user cp -n "$REPO_ROOT"/dots/happ/*.json "$USER_HOME/.config/Happ/" 2>/dev/null || true
-    info "Happ config.json + routing.json copied"
+    for j in "$REPO_ROOT"/dots/happ/*.json; do
+        if [[ -f "$USER_HOME/.config/Happ/$(basename "$j")" ]]; then
+            info "Happ/$(basename "$j") already present — left alone"
+        else
+            as_user cp "$j" "$USER_HOME/.config/Happ/"
+            info "Happ/$(basename "$j") copied"
+        fi
+    done
     TODO+=("re-add your Happ subscriptions — subs.db is not in the repo")
 
     step "wallpapers"
