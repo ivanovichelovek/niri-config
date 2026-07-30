@@ -301,6 +301,13 @@ else
     # themes/noctalia.conf into ~/.config/kitty on every wallpaper change, and
     # that generated file has no business in the repo.
     KITTY_CFG="$USER_HOME/.config/kitty"
+    # An earlier version of this script symlinked the whole directory. Drop that
+    # link FIRST: otherwise every path below resolves inside the repo, and the
+    # tracked kitty.conf gets moved aside and replaced by a symlink to itself.
+    if [[ -L $KITTY_CFG ]]; then
+        rm -f "$KITTY_CFG"
+        info "replaced the old whole-directory symlink"
+    fi
     as_user mkdir -p "$KITTY_CFG/themes"
     if [[ -f $KITTY_CFG/kitty.conf && ! -L $KITTY_CFG/kitty.conf ]]; then
         as_user mv "$KITTY_CFG/kitty.conf" "$KITTY_CFG/kitty.conf.bak.$(date +%Y%m%d%H%M%S)"

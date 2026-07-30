@@ -19,6 +19,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 
+import http.client
 import json
 import os
 import random
@@ -114,10 +115,19 @@ def wallhaven_key(prefs):
 
 
 # ── sources ─────────────────────────────────────────────────────────────────
-def _get(url):
+def _get(url, attempts=3):
+    """Konachan serves originals, some of them 30 MB, and truncates the response
+    often enough that a single try is not good enough — IncompleteRead on the
+    last few hundred KB. Retry before surfacing it."""
+    last = None
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-        return resp.read()
+    for _ in range(attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                return resp.read()
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as exc:
+            last = exc
+    raise last
 
 
 def _get_json(url):
@@ -145,24 +155,28 @@ def _fits(prefs, width, height):
 
 
 def pick_konachan(prefs):
-    """konachan.net serves safe posts only; anything else needs .com. The API
-    has no random endpoint, so we jump to a random page and filter locally —
-    hence limit=40 rather than 1."""
-    host = "konachan.net" if prefs["rating"] == "safe" else "konachan.com"
-    tags = {
-        "safe": "rating:safe",
-        "sketchy": "rating:questionable",
-        "nsfw": "rating:explicit",
-    }[prefs["rating"]]
+    """Konachan is a safe-only source. konachan.com answers 302 to konachan.net
+    for every request, and .net returns an empty list for rating:questionable
+    and rating:explicit — the content is not gated, it is not there. So say so
+    rather than fetching a page that can only come back empty.
+
+    The API has no random endpoint, so we jump to a random page and filter
+    locally — hence limit=40 rather than 1.
+    """
+    if prefs["rating"] != "safe":
+        raise FetchError(
+            "Konachan only carries safe-rated posts. Switch the source to "
+            "Wallhaven for anything above Safe."
+        )
 
     page = random.randint(1, 200)
     url = (
-        f"https://{host}/post.json?tags={urllib.parse.quote(tags)}"
+        f"https://konachan.net/post.json?tags={urllib.parse.quote('rating:safe')}"
         f"&limit=40&page={page}"
     )
     posts = _get_json(url)
     if not posts:
-        raise FetchError(f"konachan has no {tags} posts on page {page} — try again")
+        raise FetchError(f"konachan page {page} came back empty — try again")
 
     usable = [p for p in posts if p.get("file_url")
               and _fits(prefs, p.get("width"), p.get("height"))]
@@ -181,7 +195,7 @@ def pick_konachan(prefs):
         "name": f"konachan-{post.get('id', 'x')}",
         "width": post.get("width"),
         "height": post.get("height"),
-        "credit": post.get("author") or host,
+        "credit": post.get("author") or "konachan.net",
         "source": "Konachan",
     }
 
@@ -551,7 +565,8 @@ class Settings(Gtk.Window):
             )
         elif rating != "safe" and source == "konachan":
             self.rating_hint.set_text(
-                "Konachan switches to konachan.com for anything above Safe."
+                "Konachan carries safe-rated posts only — pick Wallhaven for "
+                "Sketchy or 18+."
             )
         else:
             self.rating_hint.set_text("")
@@ -720,7 +735,8 @@ class Reel(Gtk.ApplicationWindow):
             def work(prefs=prefs):
                 try:
                     frame = download(prefs)
-                except (urllib.error.URLError, OSError, ValueError, FetchError) as exc:
+                except (urllib.error.URLError, http.client.HTTPException,
+                        OSError, ValueError, FetchError) as exc:
                     GLib.idle_add(self.arrived, None, str(exc))
                 else:
                     GLib.idle_add(self.arrived, frame, None)
@@ -874,13 +890,23 @@ class Reel(Gtk.ApplicationWindow):
             button.set_tooltip_text(frame["name"])
             button.connect("clicked", lambda _b, i=i: self.go(i))
 
-            try:
-                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
-                    str(frame["path"]), 96, 54, True,
-                )
-                child = Gtk.Picture.new_for_pixbuf(pixbuf)
+            # Cached on the frame: sync() rebuilds the strip on every arrival,
+            # save, delete and arrow press, and decoding a 30 MB png each time
+            # would freeze the UI on every keystroke.
+            if "thumb" not in frame:
+                try:
+                    frame["thumb"] = Gdk.Texture.new_for_pixbuf(
+                        GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                            str(frame["path"]), 96, 54, True,
+                        )
+                    )
+                except GLib.Error:
+                    frame["thumb"] = None
+
+            if frame["thumb"]:
+                child = Gtk.Picture.new_for_paintable(frame["thumb"])
                 child.set_content_fit(Gtk.ContentFit.COVER)
-            except GLib.Error:
+            else:
                 child = Gtk.Label(label="?")
             child.set_size_request(96, 54)
             button.set_child(child)

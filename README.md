@@ -98,9 +98,19 @@ it can hold an API key):
 
 Konachan has no server-side size filter, so it fetches 40 candidates from a
 random page and picks one that fits locally. Wallhaven filters server-side via
-`ratios` and `atleast`. Above Safe, Konachan switches from `konachan.net` to
-`konachan.com`; Wallhaven serves 18+ only with an API key — put it in Filters
-or set `WALLHAVEN_API_KEY` (fish's gitignored `secrets.fish` is the place).
+`ratios` and `atleast`.
+
+**Ratings above Safe are Wallhaven-only.** `konachan.com` answers `302` with
+`location: https://konachan.net/` for every request, and searching `.net` for
+`rating:questionable` returns "Nobody here but us chickens" in the HTML as well
+as an empty array from the API — the posts are not gated, they are not indexed
+there. Picking Sketchy or 18+ with Konachan selected says so instead of
+fetching a page that can only come back empty.
+
+Wallhaven serves Sketchy without an account. For 18+ it needs an API key —
+put it in Filters or set `WALLHAVEN_API_KEY` (fish's gitignored `secrets.fish`
+is the place). Without one the API silently drops nsfw results rather than
+erroring, so the app checks for the key up front and tells you.
 
 `~/random_wallpaper` is hardcoded and created on first save. **Saving cannot
 destroy an earlier wallpaper**: downloads live in `~/.cache/random-wallpaper`
@@ -120,8 +130,8 @@ repaint it. Icon: `share/icons/hicolor/scalable/apps/dev.ivanc.RandomWallpaper.s
 The osu! seasonal-backgrounds endpoint the old script used now returns 403 —
 it moved behind OAuth — so Wallhaven replaced it.
 
-`tests/test-random-wallpaper.py` asserts the non-destructive properties and the
-filter logic against a throwaway `$HOME` — 34 checks, needs network.
+`tests/test-random-wallpaper.py` asserts the non-destructive properties and
+the filter logic against a throwaway `$HOME` — 37 checks, needs network.
 
 ## fish
 

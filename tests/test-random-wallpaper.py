@@ -113,6 +113,19 @@ for label, key, _ in rw.SOURCES:
 
 check("SAVE_DIR created on demand", rw.SAVE_DIR.is_dir())
 
+# ── konachan is safe-only, and says so rather than fetching an empty page ───
+for rating in ("sketchy", "nsfw"):
+    try:
+        rw.pick_konachan(dict(rw.DEFAULTS, rating=rating))
+        check(f"konachan refuses {rating}", False)
+    except rw.FetchError as exc:
+        check(f"konachan refuses {rating}", "Wallhaven" in str(exc))
+
+# wallhaven sketchy needs no key; 18+ does, and the API silently drops nsfw
+# results without one rather than erroring — hence the explicit gate above.
+sketchy = rw.pick_wallhaven(dict(rw.DEFAULTS, source="wallhaven", rating="sketchy"))
+check("wallhaven sketchy works without a key", sketchy["url"].startswith("http"))
+
 # ── collision branch: the whole point ───────────────────────────────────────
 precious = rw.SAVE_DIR / "konachan-1.jpg"
 precious.write_bytes(b"PRECIOUS")
