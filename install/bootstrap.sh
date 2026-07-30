@@ -141,8 +141,9 @@ PKGS=(
     fish kitty neovim micro starship eza
     # noctalia runtime deps that live in the official repos
     imagemagick brightnessctl ffmpeg wlr-randr python libqalculate
-    # bin/random-wallpaper is a GTK4 app; it talks to the APIs with stdlib urllib
-    python-gobject gtk4 libadwaita
+    # bin/random-wallpaper is a GTK4 app (no libadwaita — it ships its own
+    # theme); it talks to both wallpaper APIs with stdlib urllib.
+    python-gobject gtk4 librsvg
     # apps
     telegram-desktop nautilus
     # clipboard / screenshot / media
@@ -251,6 +252,14 @@ else
     as_user update-desktop-database "$USER_HOME/.local/share/applications" 2>/dev/null || true
     info "desktop entries linked into ~/.local/share/applications"
 
+    ICON_DIR="$USER_HOME/.local/share/icons/hicolor/scalable/apps"
+    as_user mkdir -p "$ICON_DIR"
+    for i in "$REPO_ROOT"/share/icons/hicolor/scalable/apps/*.svg; do
+        as_user ln -sf "$i" "$ICON_DIR/$(basename "$i")"
+    done
+    as_user gtk-update-icon-cache -qtf "$USER_HOME/.local/share/icons/hicolor" 2>/dev/null || true
+    info "app icons linked into ~/.local/share/icons"
+
     # The config was written on a machine where $HOME was /home/ivanc. Rewrite
     # any absolute paths so it works for whoever is installing it.
     if [[ $USER_HOME != /home/ivanc ]]; then
@@ -288,15 +297,22 @@ else
     TODO+=("optional: install fisher — curl -sL https://git.io/fisher | source && fisher update")
 
     step "kitty config"
-    link_dot kitty
-    # kitty.conf includes current-theme.conf. Noctalia's template system
-    # rewrites that file on every wallpaper change; seed it from the checked-in
-    # theme so the terminal has colours (and its 0.85 opacity) on first launch.
-    if [[ ! -f $REPO_ROOT/dots/kitty/current-theme.conf ]]; then
-        as_user cp "$REPO_ROOT/dots/kitty/theme.conf" \
-                   "$REPO_ROOT/dots/kitty/current-theme.conf"
+    # Only kitty.conf is symlinked, not the whole directory: noctalia renders
+    # themes/noctalia.conf into ~/.config/kitty on every wallpaper change, and
+    # that generated file has no business in the repo.
+    KITTY_CFG="$USER_HOME/.config/kitty"
+    as_user mkdir -p "$KITTY_CFG/themes"
+    if [[ -f $KITTY_CFG/kitty.conf && ! -L $KITTY_CFG/kitty.conf ]]; then
+        as_user mv "$KITTY_CFG/kitty.conf" "$KITTY_CFG/kitty.conf.bak.$(date +%Y%m%d%H%M%S)"
     fi
-    info "$USER_HOME/.config/kitty -> $REPO_ROOT/dots/kitty"
+    as_user ln -sf "$REPO_ROOT/dots/kitty/kitty.conf" "$KITTY_CFG/kitty.conf"
+    # Seed the palette so the terminal has colours before noctalia first runs
+    # its template; noctalia overwrites this file, never the repo.
+    if [[ ! -f $KITTY_CFG/themes/noctalia.conf ]]; then
+        as_user cp "$REPO_ROOT/dots/kitty/theme.conf" "$KITTY_CFG/themes/noctalia.conf"
+    fi
+    info "$KITTY_CFG/kitty.conf -> $REPO_ROOT/dots/kitty/kitty.conf"
+    TODO+=("enable the kitty template in noctalia settings so colours follow the wallpaper")
 
     step "neovim (LVim)"
     NVIM_CFG="$USER_HOME/.config/nvim"

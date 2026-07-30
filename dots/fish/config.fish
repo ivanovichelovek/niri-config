@@ -12,11 +12,11 @@ if status is-interactive
         enable_transience
     end
 
-    # Colors — noctalia writes terminal sequences via its template system
-    # (`noctalia msg templates-apply`). Was iNiR's quickshell path before.
-    if test -f ~/.local/state/noctalia/templates/terminal/sequences.txt
-        cat ~/.local/state/noctalia/templates/terminal/sequences.txt
-    end
+    # No terminal-colour sequences are catted here on purpose. iNiR shipped a
+    # file of escape codes for the shell to echo at startup; noctalia does not
+    # work that way — it renders ~/.config/kitty/themes/noctalia.conf from a
+    # template and signals running kitty instances with SIGUSR1. kitty.conf
+    # includes that file, so colours arrive without the shell's help.
 
     # Aliases
     # kitty doesn't clear properly so we need to do this weird printing
