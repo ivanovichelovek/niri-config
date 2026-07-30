@@ -186,6 +186,17 @@ switching does not work at all, interrupt GRUB, press `e`, and append
 `systemd.unit=multi-user.target` to the `linux` line. `dots/fish/auto-Niri.fish`
 then starts niri on tty1 login, with no greeter involved.
 
+### In a virtual machine
+
+A virtual GPU cannot give wlroots a buffer for scanout with modifiers, so
+`cage` dies with `Failed to get buffer handle for plane 0: Invalid argument`
+and greetd restarts it in a loop — a different failure from the Xwayland one
+above, with the same symptom. `bootstrap.sh` checks `systemd-detect-virt` and
+drops in `/etc/systemd/system/greetd.service.d/10-virtual-gpu.conf` with
+`WLR_RENDERER=pixman`, `WLR_DRM_NO_MODIFIERS=1` and
+`WLR_NO_HARDWARE_CURSORS=1`. Software rendering costs nothing on a login
+screen. Delete that file when moving to real hardware.
+
 `--greeter tuigreet` (text-only) and `--greeter none` avoid `cage` entirely.
 
 ## Hardware

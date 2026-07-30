@@ -436,6 +436,24 @@ EOF
         echo "unknown greeter: $GREETER" >&2; exit 1 ;;
     esac
 
+    # Virtual GPUs (vmwgfx under VirtualBox/VMware, and qxl) cannot hand wlroots
+    # a buffer for scanout with modifiers: cage dies with "Failed to get buffer
+    # handle for plane 0: Invalid argument" and greetd restarts it forever.
+    # Software rendering costs nothing on a login screen.
+    VIRT=$(systemd-detect-virt 2>/dev/null || echo none)
+    if [[ $VIRT != none && $GREETER != tuigreet ]]; then
+        install -d -m 0755 /etc/systemd/system/greetd.service.d
+        cat >/etc/systemd/system/greetd.service.d/10-virtual-gpu.conf <<'EOF'
+# Written by install/bootstrap.sh because this machine is a VM.
+# Delete this file on real hardware.
+[Service]
+Environment=WLR_RENDERER=pixman
+Environment=WLR_DRM_NO_MODIFIERS=1
+Environment=WLR_NO_HARDWARE_CURSORS=1
+EOF
+        info "$VIRT detected — greetd will use software rendering"
+    fi
+
     systemctl enable greetd.service
     info "enabled greetd.service — disable it any time with: systemctl disable greetd"
 fi
