@@ -208,6 +208,11 @@ re-install never overwrites settings you changed since.
 noctalia keeps its state in `~/.local/state/noctalia/`, not
 `~/.config/noctalia/`, which stays empty unless you add overrides.
 
+The seeded settings name a wallpaper by absolute path. With `--skip-wallpapers`
+that file was never copied, so the installer checks and falls back to
+`/usr/share/noctalia/assets/noctalia-wallpaper.png`, which ships with the shell.
+For that check to work, wallpapers are copied before the app configs.
+
 **Happ's `subs.db` is gitignored.** It is a 4 MB SQLite database of server
 subscriptions — credentials — and does not belong in a repo. Re-add the
 subscriptions from the app after installing. `config.json` (sing-box: tun, DNS,

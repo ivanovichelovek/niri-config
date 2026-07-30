@@ -351,6 +351,16 @@ else
         TODO+=("clone https://github.com/ivanovichelovek/LVim.git into ~/.config/nvim")
     fi
 
+    step "wallpapers"
+    if [[ $SKIP_WALLPAPERS == 1 ]]; then
+        info "skipped (--skip-wallpapers)"
+    elif [[ -d $REPO_ROOT/wallpapers ]]; then
+        # -n so a re-run never clobbers wallpapers added since the last install.
+        as_user cp -rn "$REPO_ROOT"/wallpapers/. "$USER_HOME/Pictures/Wallpapers/"
+        info "$(find "$REPO_ROOT/wallpapers" -type f | wc -l) wallpaper(s) -> ~/Pictures/Wallpapers"
+    else
+        warn "no wallpapers/ directory in the repo"
+    fi
     step "app configs"
     # Both are copied, not symlinked: the apps rewrite these files themselves.
     # -n so a re-run never overwrites settings changed since the install.
@@ -368,6 +378,21 @@ else
         info "noctalia settings seeded"
     fi
 
+    # Those settings name a wallpaper by absolute path. With --skip-wallpapers
+    # that file was never copied, so point them at the one noctalia ships and
+    # always installs. Runs on every install, not just the seeding one.
+    SEEDED_WALL=$(grep -m1 -oE '^path = "[^"]+"' "$NOCTALIA_SETTINGS" 2>/dev/null | cut -d'"' -f2 || true)
+    FALLBACK_WALL=/usr/share/noctalia/assets/noctalia-wallpaper.png
+    if [[ -n ${SEEDED_WALL:-} && ! -f $SEEDED_WALL ]]; then
+        if [[ -f $FALLBACK_WALL ]]; then
+            as_user sed -i "s|$SEEDED_WALL|$FALLBACK_WALL|g" "$NOCTALIA_SETTINGS"
+            warn "$(basename "$SEEDED_WALL") is missing — wallpaper reset to noctalia's default"
+        else
+            warn "wallpaper $SEEDED_WALL is missing and noctalia's default was not found"
+            TODO+=("pick a wallpaper: noctalia msg wallpaper-set <path>")
+        fi
+    fi
+
     # Happ: the sing-box config and the routing rules only. subs.db holds the
     # server subscriptions — credentials — and is gitignored, so it has to be
     # re-added by hand from the app.
@@ -382,16 +407,6 @@ else
     done
     TODO+=("re-add your Happ subscriptions — subs.db is not in the repo")
 
-    step "wallpapers"
-    if [[ $SKIP_WALLPAPERS == 1 ]]; then
-        info "skipped (--skip-wallpapers)"
-    elif [[ -d $REPO_ROOT/wallpapers ]]; then
-        # -n so a re-run never clobbers wallpapers added since the last install.
-        as_user cp -rn "$REPO_ROOT"/wallpapers/. "$USER_HOME/Pictures/Wallpapers/"
-        info "$(find "$REPO_ROOT/wallpapers" -type f | wc -l) wallpaper(s) -> ~/Pictures/Wallpapers"
-    else
-        warn "no wallpapers/ directory in the repo"
-    fi
 fi
 
 # ─── greeter ────────────────────────────────────────────────────────────────
