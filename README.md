@@ -129,6 +129,23 @@ tracked `theme.conf` at install time.
 `ctrl+f` maps to a `search.py` kitten that is not shipped here — the binding
 does nothing until you drop that kitten into `~/.config/kitty`.
 
+## Greeter
+
+`--greeter regreet` (the default) runs regreet inside `cage`. **`cage` exits if
+`/usr/bin/Xwayland` is absent**, and `xorg-xwayland` is neither a hard nor an
+optional dependency of `cage`, so pacman never installs it on its own — the
+symptom is a crash-loop with `Cannot create XWayland server` followed by
+`Lost connection to Wayland compositor`. `xorg-xwayland` is in `PKGS` for this
+reason as well as for Happ, and the greeter step re-checks it.
+
+To get out of a crash-looping greeter: switch to another VT with
+`Ctrl+Alt+F2`, log in, and `sudo systemctl disable --now greetd`. If VT
+switching does not work, interrupt GRUB, press `e`, and append
+`systemd.unit=multi-user.target` to the `linux` line. `dots/fish/auto-Niri.fish`
+then starts niri on tty1 login, with no greeter involved.
+
+`--greeter tuigreet` (text-only) and `--greeter none` avoid `cage` entirely.
+
 ## Hardware
 
 The driver list in `bootstrap.sh` targets a Ryzen 7 5800U laptop: `amd-ucode`

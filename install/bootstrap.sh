@@ -126,10 +126,16 @@ PKGS=(
     # compositor + session
     niri xdg-desktop-portal-gtk xdg-desktop-portal-gnome polkit-gnome
     xdg-user-dirs qt6-wayland
-    # X11 apps. Happ bundles Qt 6.5 and picks the xcb platform plugin regardless
-    # of QT_QPA_PLATFORM, so without these it aborts on startup. niri 26.04 has a
-    # native `xwayland-satellite` config node (see config.kdl) that starts the
-    # rootless X server and exports DISPLAY.
+    # X11 apps. Two independent things need this:
+    #   - Happ bundles Qt 6.5, ignores QT_QPA_PLATFORM and always loads the xcb
+    #     platform plugin, so it aborts without an X server. niri 26.04 has a
+    #     native `xwayland-satellite` node (see config.kdl) that starts the
+    #     rootless server and exports DISPLAY.
+    #   - cage (which runs regreet) is built against a wlroots with XWayland
+    #     support and EXITS if /usr/bin/Xwayland is missing. xorg-xwayland is
+    #     neither a hard nor an optional dependency of cage, so pacman never
+    #     pulls it in: on a clean install the greeter would crash-loop with
+    #     "Cannot create XWayland server".
     xorg-xwayland xwayland-satellite xcb-util-cursor
     # shell + terminal + editor (starship and eza are used by dots/fish)
     fish kitty neovim micro starship eza
@@ -333,6 +339,11 @@ else
         # greetd itself is a tiny daemon (~1-2 MB resident); the greeter process
         # only lives until you log in. cage is the one-window compositor it runs in.
         pacman -S --needed --noconfirm greetd greetd-regreet cage
+        # cage exits without this; see the PKGS comment above.
+        if [[ ! -x /usr/bin/Xwayland ]]; then
+            warn "/usr/bin/Xwayland missing — cage will crash-loop"
+            pacman -S --needed --noconfirm xorg-xwayland
+        fi
 
         install -d -m 0755 /etc/greetd
         cat >/etc/greetd/config.toml <<'EOF'
