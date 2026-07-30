@@ -244,7 +244,7 @@ else
     info "$NIRI_CFG -> $REPO_ROOT"
 
     for s in lock-and-suspend niri-toggle-gaps niri-nvim-touchpad wlsunset-restart \
-             random-wallpaper; do
+             random-wallpaper claude-state; do
         as_user ln -sf "$REPO_ROOT/bin/$s" "$USER_HOME/.local/bin/$s"
     done
     info "helper scripts linked into ~/.local/bin"

@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#
+# Back up and restore Claude Code's state across a reinstall.
+#
+#   claude-state save [archive.tar.gz]
+#   claude-state restore <archive.tar.gz>
+#
+# What is worth carrying: settings, the memory directory, session transcripts
+# and the prompt history. What is not: plugins and skills (77 MB + 146 MB here,
+# re-downloaded on demand) and the caches. That is the difference between a
+# ~25 MB archive and a 250 MB one.
+#
+# Credentials are deliberately excluded — ~/.claude/.credentials.json holds a
+# live auth token, and putting it on a USB stick to survive a reinstall is a
+# bad trade for one `claude login`.
+#
+set -euo pipefail
+
+INCLUDE=(
+    .claude.json                # settings + the project list
+    .claude/settings.json
+    .claude/settings.local.json
+    .claude/CLAUDE.md           # global instructions, if any
+    .claude/projects            # session transcripts AND the memory directory
+    .claude/history.jsonl       # prompt history
+    .claude/file-history
+    .claude/todos
+)
+
+usage() { sed -n '2,15p' "$0" | sed 's/^# \?//'; }
+
+cmd=${1:-}
+case $cmd in
+save)
+    out=${2:-$HOME/claude-state-$(date +%Y%m%d).tar.gz}
+    present=()
+    for p in "${INCLUDE[@]}"; do
+        [[ -e $HOME/$p ]] && present+=("$p")
+    done
+    if [[ ${#present[@]} -eq 0 ]]; then
+        echo "nothing to save — is Claude Code installed for this user?" >&2
+        exit 1
+    fi
+    tar -czf "$out" -C "$HOME" "${present[@]}"
+    echo "saved ${#present[@]} paths -> $out ($(du -h "$out" | cut -f1))"
+    printf '  %s\n' "${present[@]}"
+    echo
+    echo "Not included, on purpose: .credentials.json (run 'claude login' after"
+    echo "restoring), plugins/ and skills/ (re-downloaded), caches."
+    ;;
+restore)
+    archive=${2:?usage: claude-state restore <archive.tar.gz>}
+    [[ -f $archive ]] || { echo "no such archive: $archive" >&2; exit 1; }
+
+    # Never overwrite silently: if state already exists, move it aside first.
+    if [[ -e $HOME/.claude || -e $HOME/.claude.json ]]; then
+        stamp=$(date +%Y%m%d%H%M%S)
+        [[ -e $HOME/.claude ]]      && mv "$HOME/.claude"      "$HOME/.claude.bak.$stamp"
+        [[ -e $HOME/.claude.json ]] && mv "$HOME/.claude.json" "$HOME/.claude.json.bak.$stamp"
+        echo "existing state moved aside with suffix .bak.$stamp"
+    fi
+
+    tar -xzf "$archive" -C "$HOME"
+    echo "restored from $archive"
+    echo "now run: claude login"
+    ;;
+*)
+    usage
+    exit 1
+    ;;
+esac

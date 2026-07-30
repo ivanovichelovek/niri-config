@@ -67,6 +67,16 @@ moving off iNiR.
 Noctalia has no equivalent for them and never will: it is a layer-shell client
 and does not manage windows.
 
+## Moving to a new machine
+
+`bin/claude-state save` tars up Claude Code's settings, memory directory,
+session transcripts and prompt history — about 9 MB here, against 249 MB for
+all of `~/.claude`. `plugins/` and `skills/` are left out because they are
+re-downloaded, and `.credentials.json` because a live auth token should not
+travel on a USB stick; run `claude login` after `claude-state restore`.
+
+Restore never overwrites: existing state is moved to `.bak.<timestamp>` first.
+
 ## Random wallpaper
 
 `bin/random-wallpaper` — `Ctrl+Alt+W`, or "Random Wallpaper" in the launcher.
@@ -165,6 +175,14 @@ appends it if absent, and `kitty.conf` is a symlink into this repo.
 
 `background_opacity 0.85` means the wallpaper shows through the terminal. That
 is not a rendering artifact; raise it to `1.0` for an opaque background.
+
+The spacing is `window_padding_width`, **not** `window_margin_width`. Padding is
+the "blank area between the text and the window border" and is filled with the
+terminal background, so it obeys `background_opacity`. Margin is the "blank area
+outside the border" and is never painted — with a 21.75pt margin the wallpaper
+showed through it at full brightness while the text area sat behind 0.85
+opacity, and the hard seam between the two read as a window split down the
+middle. A non-zero margin also forces kitty to draw window borders.
 
 `ctrl+f` maps to a `search.py` kitten that is not shipped here — the binding
 does nothing until you drop that kitten into `~/.config/kitty`.
