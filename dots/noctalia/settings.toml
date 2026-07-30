@@ -37,6 +37,25 @@ widget_order = [ "lockscreen-login-box@eDP-1" ]
 [shell]
 telemetry_enabled = true
 
+[theme]
+# source/wallpaper_scheme match noctalia's own defaults; spelled out so the
+# palette-follows-wallpaper behaviour is visible here rather than implied.
+source = "wallpaper"
+wallpaper_scheme = "m3-tonal-spot"
+
+    # Templates noctalia re-renders on every palette change. Each id maps to
+    # /usr/share/noctalia/assets/templates/<id>/, whose apply.sh also reloads
+    # the running app — kitty's sends SIGUSR1.
+    #
+    # "neovim" is a community template — noctalia downloads it into
+    # ~/.local/state/noctalia/community-templates on first use. It renders
+    # ~/.config/nvim/lua/matugen.lua and signals nvim with SIGUSR1; the nvim
+    # side of that lives in the LVim repo (lua/plugins/base16.lua), which this
+    # repo only clones, so it has to be committed there separately.
+    [theme.templates]
+    builtin_ids = [ "kitty" ]
+    community_ids = [ "neovim" ]
+
 [wallpaper.default]
 path = "/home/ivanc/Pictures/Wallpapers/random_wallpaper-1.png"
 

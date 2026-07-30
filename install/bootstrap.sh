@@ -331,7 +331,8 @@ else
         as_user cp "$REPO_ROOT/dots/kitty/theme.conf" "$KITTY_CFG/themes/noctalia.conf"
     fi
     info "$KITTY_CFG/kitty.conf -> $REPO_ROOT/dots/kitty/kitty.conf"
-    TODO+=("enable the kitty template in noctalia settings so colours follow the wallpaper")
+    # No TODO here: dots/noctalia/settings.toml enables the kitty template, so
+    # colours follow the wallpaper from first login.
 
     step "neovim (LVim)"
     NVIM_CFG="$USER_HOME/.config/nvim"
