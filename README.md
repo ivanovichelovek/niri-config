@@ -199,6 +199,31 @@ screen. Delete that file when moving to real hardware.
 
 `--greeter tuigreet` (text-only) and `--greeter none` avoid `cage` entirely.
 
+## App configs
+
+`dots/noctalia/settings.toml` and `dots/happ/{config.json,routing.json}` are
+copied, not symlinked — both apps rewrite their own files. `cp -n`, so a
+re-install never overwrites settings you changed since.
+
+noctalia keeps its state in `~/.local/state/noctalia/`, not
+`~/.config/noctalia/`, which stays empty unless you add overrides.
+
+**Happ's `subs.db` is gitignored.** It is a 4 MB SQLite database of server
+subscriptions — credentials — and does not belong in a repo. Re-add the
+subscriptions from the app after installing. `config.json` (sing-box: tun, DNS,
+socks on 10808) and `routing.json` carry no secrets; the only URLs in them are
+public DNS and GitHub.
+
+Nothing else is carried over. Deliberately dropped: `btop`, `cava`, `micro`,
+`easyeffects`, all GTK/Qt theming (`kdeglobals`, `darklyrc`, `Kvantum`,
+`gtk-3.0`, `gtk-4.0`), and `~/.local/share/todoist-remind` with its four
+systemd units. `40-environment.kdl` therefore no longer sets
+`QT_QPA_PLATFORMTHEME`, `QT_STYLE_OVERRIDE` or `XDG_MENU_PREFIX`, and
+`50-startup.kdl` no longer runs `kbuildsycoca6` — all of those need packages
+that are not installed.
+
+`Mod+N`, `Mod+Ctrl+N` and `Mod+Ctrl+D` are free now: they drove todoist-remind.
+
 ## Hardware
 
 The driver list in `bootstrap.sh` targets a Ryzen 7 5800U laptop: `amd-ucode`
@@ -233,14 +258,13 @@ Six named workspaces, always present, with apps assigned on open:
 | `chat` | Telegram | `org.telegram.desktop` |
 | `code` | Neovim | `nvim` (kitty `--class nvim`) |
 | `music` | Yandex Music | `YandexMusic` |
-| `vpn` | Happ | `(?i)^happ$` — **unverified**, see below |
+| `vpn` | Happ | `Happ` |
 
 All except the terminal open maximized. `Mod+1`…`Mod+6` focus them in that order.
 
-Every app-id above was read off the installed `.desktop` file except **Happ**:
-`happ-desktop-bin` ships none (its binary is `/opt/happ/bin/Happ`), so the rule
-is a case-insensitive guess. Confirm with `niri msg windows` once it's running
-and pin the exact value.
+Every app-id above was read off the installed `.desktop` file except **Happ**,
+which ships none — that one was read off a running window with
+`niri msg windows`. Capital H, exactly `Happ`.
 
 ## Shell binds
 

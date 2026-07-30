@@ -10,23 +10,18 @@ environment {
     // Tell apps which compositor is running (used by xdg-desktop-portal, etc.).
     XDG_CURRENT_DESKTOP "niri"
 
-    // Use Plasma's app-menu prefix so kbuildsycoca6 indexes .desktop files
-    // and Dolphin/Nautilus "Open With" menus work correctly.
-    XDG_MENU_PREFIX "plasma-"
-
     // Force Qt apps to use Wayland natively (no XWayland fallback).
     QT_QPA_PLATFORM "wayland"
 
     // Let Electron apps (Chrome, VS Code, Discord) pick Wayland automatically.
     ELECTRON_OZONE_PLATFORM_HINT "auto"
 
-    // Qt theming: "kde" reads colors from kdeglobals (requires plasma-integration).
-    // Without plasma-integration installed, use "qt6ct" instead.
-    QT_QPA_PLATFORMTHEME "kde"
-
-    // Darkly is a modern Qt style that follows kdeglobals color schemes.
-    QT_STYLE_OVERRIDE "Darkly"
-
+    // Dropped along with the themes, which are not carried over: XDG_MENU_PREFIX
+    // (Plasma menu prefix, needs kbuildsycoca6 from kservice),
+    // QT_QPA_PLATFORMTHEME "kde" (needs plasma-integration + kdeglobals) and
+    // QT_STYLE_OVERRIDE "Darkly" (needs the darkly package). Qt apps fall back
+    // to their own default styling. Put them back if you install a Qt theme.
+    //
     // Dropped when moving off iNiR — these were Quickshell/illogical-impulse only:
     //   QT_LOGGING_RULES "quickshell.dbus.properties=false"
     //   INIR_VENV "$HOME/.local/state/quickshell/.venv"

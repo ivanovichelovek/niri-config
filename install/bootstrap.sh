@@ -344,6 +344,26 @@ else
         TODO+=("clone https://github.com/ivanovichelovek/LVim.git into ~/.config/nvim")
     fi
 
+    step "app configs"
+    # Both are copied, not symlinked: the apps rewrite these files themselves.
+    # -n so a re-run never overwrites settings changed since the install.
+
+    # noctalia keeps its state here, not in ~/.config/noctalia (which stays
+    # empty unless you add user overrides).
+    as_user mkdir -p "$USER_HOME/.local/state/noctalia"
+    as_user cp -n "$REPO_ROOT/dots/noctalia/settings.toml" \
+                  "$USER_HOME/.local/state/noctalia/settings.toml" 2>/dev/null \
+        && info "noctalia settings seeded" \
+        || info "noctalia settings already present — left alone"
+
+    # Happ: the sing-box config and the routing rules only. subs.db holds the
+    # server subscriptions — credentials — and is gitignored, so it has to be
+    # re-added by hand from the app.
+    as_user mkdir -p "$USER_HOME/.config/Happ"
+    as_user cp -n "$REPO_ROOT"/dots/happ/*.json "$USER_HOME/.config/Happ/" 2>/dev/null || true
+    info "Happ config.json + routing.json copied"
+    TODO+=("re-add your Happ subscriptions — subs.db is not in the repo")
+
     step "wallpapers"
     if [[ $SKIP_WALLPAPERS == 1 ]]; then
         info "skipped (--skip-wallpapers)"

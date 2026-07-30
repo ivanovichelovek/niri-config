@@ -12,9 +12,8 @@
 // user unit for it you will get two shells fighting over the same D-Bus names.
 spawn-at-startup "noctalia" "-d"
 
-// Export XDG_MENU_PREFIX into the systemd user session and rebuild the
-// sycoca database so KDE/Qt apps see the correct .desktop entries.
-spawn-at-startup "bash" "-c" "systemctl --user import-environment XDG_MENU_PREFIX && kbuildsycoca6"
+// Dropped with the Plasma theming: this rebuilt the KDE sycoca database, and
+// kbuildsycoca6 comes from kservice, which is not installed.
 
 // Clipboard history: wl-paste watches the clipboard and cliphist stores it.
 // Type-specific watchers prevent duplicate entries (browsers offer both

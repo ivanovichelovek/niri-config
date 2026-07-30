@@ -30,7 +30,6 @@ workspace "vpn"
 // terminal (kitty)
 window-rule {
     match app-id="kitty"
-    exclude title=r"^remind-"
     open-on-workspace "term"
 }
 
@@ -70,11 +69,10 @@ window-rule {
     open-maximized true
 }
 
-// vpn (happ) — app-id NOT verified: happ-desktop-bin ships no .desktop file,
-// its binary is /opt/happ/bin/Happ. Case-insensitive match as a best guess.
-// Confirm on the new system with `niri msg windows` and pin it exactly.
+// vpn (happ) — app-id read off a running window with `niri msg windows`.
+// Capital H, exactly "Happ"; happ-desktop-bin ships no .desktop file to check.
 window-rule {
-    match app-id=r#"(?i)^happ$"#
+    match app-id="Happ"
     open-on-workspace "vpn"
     open-maximized true
 }
@@ -87,21 +85,14 @@ window-rule {
 }
 
 
-// ── Todoist reminders ────────────────────────────────────────────────────────
-window-rule {
-    match title=r"^remind-"
-    open-floating true
-}
-
 binds {
     // ═══════════════════════════════════════════════════════════════════════
     // Tools
     // ═══════════════════════════════════════════════════════════════════════
-
-    // Reminder list, add, delete — floating kitty windows.
-    Mod+N repeat=false hotkey-overlay-title="Reminder list" { spawn "kitty" "--title" "remind-list" "--hold" "fish" "-c" "source $HOME/.local/share/todoist-remind/cli/remind_list.fish"; }
-    Mod+Ctrl+N repeat=false hotkey-overlay-title="Add reminder" { spawn "kitty" "--title" "remind-add" "--hold" "fish" "-c" "source $HOME/.local/share/todoist-remind/cli/remind_add.fish"; }
-    Mod+Ctrl+D repeat=false hotkey-overlay-title="Delete reminder" { spawn "kitty" "--title" "remind-del" "--hold" "fish" "-c" "source $HOME/.local/share/todoist-remind/cli/remind_del.fish"; }
+    //
+    // Dropped with the move off the old dotfiles: Mod+N / Mod+Ctrl+N /
+    // Mod+Ctrl+D drove ~/.local/share/todoist-remind, which is not carried
+    // over. Those three keys are free.
 
     // Focus mode: remove gaps, corner radius and hide the shell bar.
     Mod+Shift+F repeat=false hotkey-overlay-title="Focus mode" { spawn "/home/ivanc/.local/bin/niri-toggle-gaps"; }
