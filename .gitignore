@@ -2,3 +2,7 @@
 *.bak2
 *.lock
 dots/fish/conf.d/secrets.fish
+
+# kitty writes/receives a generated palette here; not tracked.
+dots/kitty/current-theme.conf
+__pycache__/

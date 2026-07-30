@@ -1,0 +1,19 @@
+[Desktop Entry]
+Type=Application
+Name=Random Wallpaper
+Comment=Download a random wallpaper and keep it or throw it away
+Exec=/home/ivanc/.local/bin/random-wallpaper
+Icon=preferences-desktop-wallpaper
+Terminal=false
+Categories=Graphics;Utility;
+StartupWMClass=dev.ivanc.RandomWallpaper
+Keywords=wallpaper;background;random;konachan;wallhaven;
+Actions=Konachan;Wallhaven;
+
+[Desktop Action Konachan]
+Name=From Konachan
+Exec=/home/ivanc/.local/bin/random-wallpaper --source konachan
+
+[Desktop Action Wallhaven]
+Name=From Wallhaven
+Exec=/home/ivanc/.local/bin/random-wallpaper --source wallhaven

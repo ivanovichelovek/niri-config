@@ -1,0 +1,446 @@
+#!/usr/bin/env python3
+"""Fetch a random wallpaper, preview it, keep it or throw it away.
+
+Replaces iNiR's random_konachan_wall.sh, which downloaded straight over
+~/Pictures/Wallpapers/random_wallpaper.jpg — one slot, silently overwritten on
+every run, so keeping an image meant racing to copy it out by hand.
+
+Here the download lands in a cache directory and is only ever moved into
+SAVE_DIR when you press Save. Delete (or closing the window) unlinks the
+temporary file and touches nothing else: every wallpaper you have already
+saved is safe by construction, because the app never writes to a name that
+already exists.
+
+Sources are the same two the old shell scripts used — konachan (rating:safe)
+and the osu! seasonal backgrounds.
+"""
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+
+import json
+import os
+import random
+import shutil
+import subprocess
+import tempfile
+import threading
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+from gi.repository import Adw, Gdk, GLib, Gtk
+
+# Hardcoded on purpose: one known place, independent of XDG_PICTURES_DIR, so a
+# keybind and a terminal run always agree on where saved wallpapers live.
+SAVE_DIR = Path.home() / "random_wallpaper"
+
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "random-wallpaper"
+
+# Konachan blocks the default urllib agent.
+USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+)
+
+TIMEOUT = 30
+
+
+class FetchError(Exception):
+    pass
+
+
+def _get(url):
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        return resp.read()
+
+
+def _get_json(url):
+    return json.loads(_get(url))
+
+
+def pick_konachan():
+    """Random safe-rated post. The API has no 'random' endpoint, so we jump to
+    a random page and take the single post on it."""
+    page = random.randint(1, 1000)
+    url = (
+        "https://konachan.net/post.json"
+        "?tags=" + urllib.parse.quote("rating:safe") + f"&limit=1&page={page}"
+    )
+    posts = _get_json(url)
+    if not posts:
+        raise FetchError(f"konachan returned no posts on page {page}")
+    post = posts[0]
+    file_url = post.get("file_url")
+    if not file_url:
+        raise FetchError("konachan post has no file_url")
+    if file_url.startswith("//"):
+        file_url = "https:" + file_url
+    return {
+        "url": file_url,
+        "name": f"konachan-{post.get('id', 'x')}",
+        "width": post.get("width"),
+        "height": post.get("height"),
+        "credit": post.get("author") or "konachan.net",
+        "page": f"https://konachan.net/post/show/{post.get('id')}",
+    }
+
+
+def pick_wallhaven():
+    """purity=100 is SFW only, categories=110 is general+anime. The public API
+    needs no key as long as we stay inside those two."""
+    url = (
+        "https://wallhaven.cc/api/v1/search"
+        "?sorting=random&purity=100&categories=110&atleast=1920x1080"
+    )
+    posts = _get_json(url).get("data") or []
+    if not posts:
+        raise FetchError("wallhaven returned no results")
+    post = random.choice(posts)
+    if not post.get("path"):
+        raise FetchError("wallhaven result has no path")
+    return {
+        "url": post["path"],
+        "name": f"wallhaven-{post.get('id', 'x')}",
+        "width": post.get("dimension_x"),
+        "height": post.get("dimension_y"),
+        "credit": "wallhaven.cc",
+        "page": post.get("short_url") or post.get("url"),
+    }
+
+
+# The osu! seasonal-backgrounds endpoint the old shell script used now answers
+# 403 — it went behind OAuth — so wallhaven takes its place as second source.
+SOURCES = [
+    ("Konachan", "konachan", pick_konachan),
+    ("Wallhaven", "wallhaven", pick_wallhaven),
+]
+
+
+def download(source_index):
+    """Runs off the main thread. Returns a dict describing a file on disk."""
+    meta = SOURCES[source_index][2]()
+    ext = Path(urllib.parse.urlparse(meta["url"]).path).suffix.lower()
+    if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"):
+        ext = ".jpg"
+
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=CACHE_DIR, prefix="pending-", suffix=ext)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(_get(meta["url"]))
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+    meta["path"] = Path(tmp)
+    meta["ext"] = ext
+    meta["bytes"] = meta["path"].stat().st_size
+    return meta
+
+
+def human_size(n):
+    for unit in ("B", "KB", "MB"):
+        if n < 1024 or unit == "MB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def unique_path(directory, stem, ext):
+    """A name that does not exist yet. This is what makes Save non-destructive:
+    we never open an existing file for writing."""
+    candidate = directory / f"{stem}{ext}"
+    n = 2
+    while candidate.exists():
+        candidate = directory / f"{stem}-{n}{ext}"
+        n += 1
+    return candidate
+
+
+CSS = b"""
+.preview-frame {
+    background: @view_bg_color;
+    border-radius: 12px;
+}
+.meta {
+    font-size: 0.9em;
+    color: alpha(currentColor, 0.65);
+}
+.meta-title {
+    font-weight: 700;
+}
+.placeholder {
+    color: alpha(currentColor, 0.45);
+}
+"""
+
+
+class Window(Adw.ApplicationWindow):
+    def __init__(self, app, source_index):
+        super().__init__(application=app, title="Random Wallpaper")
+        self.set_default_size(940, 700)
+
+        self.current = None       # metadata of the pending download, or None
+        self.busy = False
+
+        self.toasts = Adw.ToastOverlay()
+        self.set_content(self.toasts)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.toasts.set_child(root)
+
+        # ── header ──────────────────────────────────────────────────────────
+        header = Adw.HeaderBar()
+        root.append(header)
+
+        self.source = Gtk.DropDown.new_from_strings([s[0] for s in SOURCES])
+        self.source.set_selected(source_index)
+        self.source.set_tooltip_text("Where to fetch from")
+        self.source.connect("notify::selected", lambda *_: self.fetch())
+        header.pack_start(self.source)
+
+        self.spinner = Gtk.Spinner()
+        header.pack_end(self.spinner)
+
+        # ── preview ─────────────────────────────────────────────────────────
+        frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        frame.add_css_class("preview-frame")
+        frame.set_margin_start(18)
+        frame.set_margin_end(18)
+        frame.set_margin_top(6)
+        frame.set_vexpand(True)
+        root.append(frame)
+
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
+        self.stack.set_vexpand(True)
+        frame.append(self.stack)
+
+        self.picture = Gtk.Picture()
+        self.picture.set_content_fit(Gtk.ContentFit.CONTAIN)
+        self.picture.set_can_shrink(True)
+        self.stack.add_named(self.picture, "image")
+
+        self.status = Adw.StatusPage(icon_name="image-x-generic-symbolic")
+        self.status.add_css_class("placeholder")
+        self.stack.add_named(self.status, "status")
+
+        # ── footer ──────────────────────────────────────────────────────────
+        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        footer.set_margin_start(18)
+        footer.set_margin_end(18)
+        footer.set_margin_top(14)
+        footer.set_margin_bottom(18)
+        root.append(footer)
+
+        meta_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        meta_box.set_hexpand(True)
+        meta_box.set_valign(Gtk.Align.CENTER)
+        footer.append(meta_box)
+
+        self.meta_title = Gtk.Label(xalign=0, ellipsize=3)
+        self.meta_title.add_css_class("meta-title")
+        meta_box.append(self.meta_title)
+
+        self.meta_sub = Gtk.Label(xalign=0, ellipsize=3)
+        self.meta_sub.add_css_class("meta")
+        meta_box.append(self.meta_sub)
+
+        self.set_wall = Gtk.CheckButton(label="Set as wallpaper on save")
+        self.set_wall.set_active(True)
+        self.set_wall.set_valign(Gtk.Align.CENTER)
+        footer.append(self.set_wall)
+
+        self.btn_delete = Gtk.Button(label="Delete")
+        self.btn_delete.add_css_class("destructive-action")
+        self.btn_delete.add_css_class("pill")
+        self.btn_delete.set_tooltip_text("Discard this download (D)")
+        self.btn_delete.connect("clicked", lambda *_: self.discard(close=True))
+        footer.append(self.btn_delete)
+
+        self.btn_next = Gtk.Button(label="Next")
+        self.btn_next.add_css_class("pill")
+        self.btn_next.set_tooltip_text("Discard this one and fetch another (N)")
+        self.btn_next.connect("clicked", lambda *_: self.fetch())
+        footer.append(self.btn_next)
+
+        self.btn_save = Gtk.Button(label="Save")
+        self.btn_save.add_css_class("suggested-action")
+        self.btn_save.add_css_class("pill")
+        self.btn_save.set_tooltip_text(f"Keep it in {SAVE_DIR} (S)")
+        self.btn_save.connect("clicked", lambda *_: self.save())
+        footer.append(self.btn_save)
+
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self.on_key)
+        self.add_controller(keys)
+
+        # Nothing is saved until Save is pressed, so closing the window is a
+        # discard — otherwise the cache would fill up with abandoned downloads.
+        self.connect("close-request", self.on_close)
+
+        self.fetch()
+
+    # ── state ───────────────────────────────────────────────────────────────
+    def set_busy(self, busy, message="Fetching…"):
+        self.busy = busy
+        for w in (self.btn_save, self.btn_next, self.btn_delete, self.source):
+            w.set_sensitive(not busy)
+        if busy:
+            self.spinner.start()
+            self.status.set_title(message)
+            self.status.set_description(None)
+            self.stack.set_visible_child_name("status")
+            self.meta_title.set_text("")
+            self.meta_sub.set_text("")
+        else:
+            self.spinner.stop()
+
+    def show_error(self, text):
+        self.set_busy(False)
+        self.btn_save.set_sensitive(False)
+        self.status.set_icon_name("dialog-error-symbolic")
+        self.status.set_title("Could not fetch a wallpaper")
+        self.status.set_description(text)
+        self.stack.set_visible_child_name("status")
+
+    # ── actions ─────────────────────────────────────────────────────────────
+    def fetch(self):
+        if self.busy:
+            return
+        self.discard(close=False)
+        self.set_busy(True)
+        self.status.set_icon_name("image-x-generic-symbolic")
+        index = self.source.get_selected()
+
+        def work():
+            try:
+                meta = download(index)
+            except (urllib.error.URLError, OSError, ValueError, FetchError) as exc:
+                GLib.idle_add(self.show_error, str(exc))
+            else:
+                GLib.idle_add(self.present_image, meta)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def present_image(self, meta):
+        self.current = meta
+        self.set_busy(False)
+        self.picture.set_filename(str(meta["path"]))
+        self.stack.set_visible_child_name("image")
+
+        # The API resolution is missing for osu!; read it back off the pixbuf.
+        w, h = meta.get("width"), meta.get("height")
+        if not (w and h):
+            paintable = self.picture.get_paintable()
+            if paintable:
+                w = paintable.get_intrinsic_width() or None
+                h = paintable.get_intrinsic_height() or None
+
+        source_label = SOURCES[self.source.get_selected()][0]
+        self.meta_title.set_text(meta["name"])
+        bits = [source_label]
+        if w and h:
+            bits.append(f"{w}×{h}")
+        bits.append(human_size(meta["bytes"]))
+        if meta.get("credit"):
+            bits.append(meta["credit"])
+        self.meta_sub.set_text("  ·  ".join(bits))
+        return False
+
+    def discard(self, close=False):
+        """Unlink the pending download. Never touches SAVE_DIR."""
+        if self.current:
+            self.current["path"].unlink(missing_ok=True)
+            self.current = None
+            self.picture.set_paintable(None)
+        if close:
+            self.close()
+
+    def save(self):
+        if not self.current or self.busy:
+            return
+        SAVE_DIR.mkdir(parents=True, exist_ok=True)
+        dest = unique_path(SAVE_DIR, self.current["name"], self.current["ext"])
+
+        # move, not copy: the cache file is the only copy and it is going away
+        shutil.move(str(self.current["path"]), dest)
+        self.current = None
+
+        if self.set_wall.get_active():
+            self.apply_wallpaper(dest)
+
+        self.toasts.add_toast(Adw.Toast(title=f"Saved to {dest}", timeout=4))
+        self.fetch()
+
+    def apply_wallpaper(self, path):
+        try:
+            subprocess.run(
+                ["noctalia", "msg", "wallpaper-set", str(path)],
+                check=True, capture_output=True, timeout=10,
+            )
+        except (subprocess.SubprocessError, OSError) as exc:
+            # Saving already succeeded; a failed apply must not look like a
+            # failed save.
+            self.toasts.add_toast(Adw.Toast(title=f"Saved, but could not set it: {exc}"))
+
+    # ── input ───────────────────────────────────────────────────────────────
+    def on_key(self, _controller, keyval, _keycode, _state):
+        if self.busy:
+            return False
+        name = Gdk.keyval_name(keyval)
+        if name in ("s", "S", "Return"):
+            self.save()
+        elif name in ("d", "D", "Delete"):
+            self.discard(close=True)
+        elif name in ("n", "N", "space"):
+            self.fetch()
+        elif name == "Escape":
+            self.close()
+        else:
+            return False
+        return True
+
+    def on_close(self, *_):
+        self.discard(close=False)
+        return False
+
+
+class App(Adw.Application):
+    def __init__(self, source_index):
+        super().__init__(application_id="dev.ivanc.RandomWallpaper")
+        self.source_index = source_index
+
+    def do_startup(self):
+        Adw.Application.do_startup(self)
+        provider = Gtk.CssProvider()
+        provider.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+
+    def do_activate(self):
+        win = self.props.active_window or Window(self, self.source_index)
+        win.present()
+
+
+def main():
+    import argparse
+
+    names = [s[1] for s in SOURCES]
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--source", choices=names, default=names[0],
+        help="which site to fetch from (default: %(default)s)",
+    )
+    args = parser.parse_args()
+
+    Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.PREFER_DARK)
+    App(names.index(args.source)).run([])
+
+
+if __name__ == "__main__":
+    main()

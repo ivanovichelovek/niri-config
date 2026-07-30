@@ -38,6 +38,14 @@ debug {
     honor-xdg-activation-with-invalid-serial
 }
 
+// Rootless X server for X11-only apps. niri starts it and exports DISPLAY into
+// the session itself — do not also spawn it from 50-startup.kdl or you get two.
+// Happ needs this: it bundles Qt 6.5, ignores QT_QPA_PLATFORM and always loads
+// the xcb platform plugin, so without an X server it aborts with SIGABRT.
+xwayland-satellite {
+    path "/usr/bin/xwayland-satellite"
+}
+
 // Where native Niri screenshots land (Print key).
 // Noctalia's region selector (Mod+Shift+S) uses its own configured path.
 screenshot-path "~/Pictures/Screenshots/Screenshot from %Y-%m-%d %H-%M-%S.png"

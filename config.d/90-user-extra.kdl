@@ -105,6 +105,17 @@ binds {
 
     // Focus mode: remove gaps, corner radius and hide the shell bar.
     Mod+Shift+F repeat=false hotkey-overlay-title="Focus mode" { spawn "/home/ivanc/.local/bin/niri-toggle-gaps"; }
+
+    // Download a random wallpaper and preview it before keeping it.
+    // Saves to ~/random_wallpaper only when you press Save; Delete throws the
+    // download away. Also in the launcher as "Random Wallpaper".
+    Ctrl+Alt+W repeat=false hotkey-overlay-title="Random wallpaper" { spawn "/home/ivanc/.local/bin/random-wallpaper"; }
+}
+
+// The random wallpaper previewer is a dialog, not a workspace app.
+window-rule {
+    match app-id="dev.ivanc.RandomWallpaper"
+    open-floating true
 }
 
 //   window-rule {

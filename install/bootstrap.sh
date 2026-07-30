@@ -20,6 +20,7 @@ set -euo pipefail
 SKIP_AUR=0
 SKIP_GREETER=0
 SKIP_LINK=0
+SKIP_WALLPAPERS=0
 GREETER="regreet"   # regreet | noctalia | tuigreet | none
 
 usage() {
@@ -30,6 +31,7 @@ Options:
   --skip-aur         official repos only (no yay, no zen/chrome/noctalia/…)
   --skip-greeter     don't install or enable a display manager
   --skip-link        install packages only, don't touch ~/.config
+  --skip-wallpapers  don't copy wallpapers/ into ~/Pictures/Wallpapers
   --greeter <name>   regreet (default) | noctalia | tuigreet | none
   -h, --help         this text
 EOF
@@ -40,6 +42,7 @@ while [[ $# -gt 0 ]]; do
         --skip-aur)     SKIP_AUR=1; shift ;;
         --skip-greeter) SKIP_GREETER=1; shift ;;
         --skip-link)    SKIP_LINK=1; shift ;;
+        --skip-wallpapers) SKIP_WALLPAPERS=1; shift ;;
         --greeter)      GREETER=${2:?--greeter needs a value}; shift 2 ;;
         -h|--help)      usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage; exit 1 ;;
@@ -77,6 +80,20 @@ info()  { printf '    %s\n' "$*"; }
 warn()  { printf '\033[1;33m  ! %s\033[0m\n' "$*"; }
 as_user() { sudo -u "$USER_NAME" HOME="$USER_HOME" "$@"; }
 
+# Point ~/.config/<name> at dots/<name>. An existing real directory is moved
+# aside rather than deleted — this script must never lose someone's config.
+link_dot() {
+    local name=$1 dst="$USER_HOME/.config/$1"
+    if [[ -e $dst && ! -L $dst ]]; then
+        local backup="$dst.bak.$(date +%Y%m%d%H%M%S)"
+        warn "$dst exists — moving it to $backup"
+        as_user mv "$dst" "$backup"
+    elif [[ -L $dst ]]; then
+        rm -f "$dst"
+    fi
+    as_user ln -s "$REPO_ROOT/dots/$name" "$dst"
+}
+
 TODO=()
 
 echo "user:   $USER_NAME ($USER_HOME)"
@@ -109,10 +126,17 @@ PKGS=(
     # compositor + session
     niri xdg-desktop-portal-gtk xdg-desktop-portal-gnome polkit-gnome
     xdg-user-dirs qt6-wayland
+    # X11 apps. Happ bundles Qt 6.5 and picks the xcb platform plugin regardless
+    # of QT_QPA_PLATFORM, so without these it aborts on startup. niri 26.04 has a
+    # native `xwayland-satellite` config node (see config.kdl) that starts the
+    # rootless X server and exports DISPLAY.
+    xorg-xwayland xwayland-satellite xcb-util-cursor
     # shell + terminal + editor (starship and eza are used by dots/fish)
     fish kitty neovim micro starship eza
     # noctalia runtime deps that live in the official repos
     imagemagick brightnessctl ffmpeg wlr-randr python libqalculate
+    # bin/random-wallpaper is a GTK4 app; it talks to the APIs with stdlib urllib
+    python-gobject gtk4 libadwaita
     # apps
     telegram-desktop nautilus
     # clipboard / screenshot / media
@@ -207,15 +231,25 @@ else
     as_user ln -s "$REPO_ROOT" "$NIRI_CFG"
     info "$NIRI_CFG -> $REPO_ROOT"
 
-    for s in lock-and-suspend niri-toggle-gaps niri-nvim-touchpad wlsunset-restart; do
+    for s in lock-and-suspend niri-toggle-gaps niri-nvim-touchpad wlsunset-restart \
+             random-wallpaper; do
         as_user ln -sf "$REPO_ROOT/bin/$s" "$USER_HOME/.local/bin/$s"
     done
     info "helper scripts linked into ~/.local/bin"
 
+    # Desktop entries, so the shell launcher can find random-wallpaper too.
+    as_user mkdir -p "$USER_HOME/.local/share/applications"
+    for d in "$REPO_ROOT"/share/applications/*.desktop; do
+        as_user ln -sf "$d" "$USER_HOME/.local/share/applications/$(basename "$d")"
+    done
+    as_user update-desktop-database "$USER_HOME/.local/share/applications" 2>/dev/null || true
+    info "desktop entries linked into ~/.local/share/applications"
+
     # The config was written on a machine where $HOME was /home/ivanc. Rewrite
     # any absolute paths so it works for whoever is installing it.
     if [[ $USER_HOME != /home/ivanc ]]; then
-        mapfile -t HARDCODED < <(grep -rl "/home/ivanc" "$REPO_ROOT/config.kdl" "$REPO_ROOT/config.d" 2>/dev/null || true)
+        mapfile -t HARDCODED < <(grep -rl "/home/ivanc" "$REPO_ROOT/config.kdl" \
+            "$REPO_ROOT/config.d" "$REPO_ROOT/share" 2>/dev/null || true)
         if [[ ${#HARDCODED[@]} -gt 0 ]]; then
             as_user sed -i "s|/home/ivanc|$USER_HOME|g" "${HARDCODED[@]}"
             info "rewrote /home/ivanc -> $USER_HOME in ${#HARDCODED[@]} file(s)"
@@ -234,16 +268,8 @@ else
     as_user mkdir -p "$USER_HOME/Pictures/Wallpapers" "$USER_HOME/Pictures/Screenshots"
 
     step "fish config"
-    FISH_CFG="$USER_HOME/.config/fish"
-    if [[ -e $FISH_CFG && ! -L $FISH_CFG ]]; then
-        BACKUP="$FISH_CFG.bak.$(date +%Y%m%d%H%M%S)"
-        warn "$FISH_CFG exists — moving it to $BACKUP"
-        as_user mv "$FISH_CFG" "$BACKUP"
-    elif [[ -L $FISH_CFG ]]; then
-        rm -f "$FISH_CFG"
-    fi
-    as_user ln -s "$REPO_ROOT/dots/fish" "$FISH_CFG"
-    info "$FISH_CFG -> $REPO_ROOT/dots/fish"
+    link_dot fish
+    info "$USER_HOME/.config/fish -> $REPO_ROOT/dots/fish"
 
     # Secrets are deliberately not in the repo.
     if [[ ! -f $REPO_ROOT/dots/fish/conf.d/secrets.fish ]]; then
@@ -254,6 +280,46 @@ else
     # fish_variables references fisher; the plugin manager itself is not a
     # pacman package and installs from inside fish.
     TODO+=("optional: install fisher — curl -sL https://git.io/fisher | source && fisher update")
+
+    step "kitty config"
+    link_dot kitty
+    # kitty.conf includes current-theme.conf. Noctalia's template system
+    # rewrites that file on every wallpaper change; seed it from the checked-in
+    # theme so the terminal has colours (and its 0.85 opacity) on first launch.
+    if [[ ! -f $REPO_ROOT/dots/kitty/current-theme.conf ]]; then
+        as_user cp "$REPO_ROOT/dots/kitty/theme.conf" \
+                   "$REPO_ROOT/dots/kitty/current-theme.conf"
+    fi
+    info "$USER_HOME/.config/kitty -> $REPO_ROOT/dots/kitty"
+
+    step "neovim (LVim)"
+    NVIM_CFG="$USER_HOME/.config/nvim"
+    if [[ -e $NVIM_CFG ]]; then
+        info "$NVIM_CFG already exists — left alone"
+    elif as_user git clone --quiet https://github.com/ivanovichelovek/LVim.git "$NVIM_CFG"; then
+        info "cloned LVim into $NVIM_CFG"
+        # Cloned over https so it works before any SSH key exists; switch the
+        # remote to ssh so pushing works once the key is in place.
+        as_user git -C "$NVIM_CFG" remote set-url origin \
+            git@github.com:ivanovichelovek/LVim.git
+        as_user git -C "$NVIM_CFG" remote add upstream \
+            https://github.com/LazyVim/LazyVim.git 2>/dev/null || true
+        TODO+=("first 'nvim' run installs plugins — needs network, takes a minute")
+    else
+        warn "could not clone LVim"
+        TODO+=("clone https://github.com/ivanovichelovek/LVim.git into ~/.config/nvim")
+    fi
+
+    step "wallpapers"
+    if [[ $SKIP_WALLPAPERS == 1 ]]; then
+        info "skipped (--skip-wallpapers)"
+    elif [[ -d $REPO_ROOT/wallpapers ]]; then
+        # -n so a re-run never clobbers wallpapers added since the last install.
+        as_user cp -rn "$REPO_ROOT"/wallpapers/. "$USER_HOME/Pictures/Wallpapers/"
+        info "$(find "$REPO_ROOT/wallpapers" -type f | wc -l) wallpaper(s) -> ~/Pictures/Wallpapers"
+    else
+        warn "no wallpapers/ directory in the repo"
+    fi
 fi
 
 # ─── greeter ────────────────────────────────────────────────────────────────

@@ -23,8 +23,9 @@ ln -s ~/GitHub/niri-config ~/.config/niri
 
 # helper scripts referenced by binds
 mkdir -p ~/.local/bin
-ln -s ~/GitHub/niri-config/bin/lock-and-suspend  ~/.local/bin/
-ln -s ~/GitHub/niri-config/bin/niri-toggle-gaps  ~/.local/bin/
+ln -s ~/GitHub/niri-config/bin/*  ~/.local/bin/
+ln -s ~/GitHub/niri-config/dots/fish   ~/.config/fish
+ln -s ~/GitHub/niri-config/dots/kitty  ~/.config/kitty
 
 niri validate            # should print "config is valid"
 ```
@@ -33,10 +34,14 @@ Requires: `niri`, `noctalia`, `kitty`, `fish`, `zen-browser`, `google-chrome`,
 `telegram-desktop`, `yandex-music`, `happ-desktop-bin`, `nautilus`, `cliphist`,
 `wl-clipboard`, and a polkit agent — `bootstrap.sh` installs all of them.
 
-All four helper scripts live in `bin/` and are symlinked into `~/.local/bin`:
-`lock-and-suspend`, `niri-toggle-gaps`, `niri-nvim-touchpad` (spawned by
-`config.d/90-user-extra.kdl`) and `wlsunset-restart` (called by
+All helper scripts live in `bin/` and are symlinked into `~/.local/bin`:
+`lock-and-suspend`, `niri-toggle-gaps`, `random-wallpaper`, `niri-nvim-touchpad`
+(spawned by `config.d/90-user-extra.kdl`) and `wlsunset-restart` (called by
 `lock-and-suspend`).
+
+`--skip-wallpapers` leaves `~/Pictures/Wallpapers` alone; otherwise the 28
+images in `wallpapers/` are copied there. The copy uses `cp -n`, so re-running
+the script never overwrites anything you have added since.
 
 ## Layout
 
@@ -50,12 +55,41 @@ All four helper scripts live in `bin/` and are symlinked into `~/.local/bin`:
 | `60-animations.kdl` | unchanged (comment wording only) |
 | `70-binds.kdl` | 37 iNiR binds re-pointed at `noctalia msg` |
 | `80-layer-rules.kdl` | `quickshell:*Backdrop` → `noctalia-wallpaper` |
-| `90-user-extra.kdl` | **unchanged** — named workspaces + per-app assignment |
+| `90-user-extra.kdl` | named workspaces + per-app assignment + personal binds |
 
 The two files carrying the app automation — `30-window-rules.kdl` and
-`90-user-extra.kdl` — are compositor config and needed no conversion at all.
+`90-user-extra.kdl` — are compositor config and needed no conversion when
+moving off iNiR.
 Noctalia has no equivalent for them and never will: it is a layer-shell client
 and does not manage windows.
+
+## Random wallpaper
+
+`bin/random-wallpaper` — a GTK4 app on `Ctrl+Alt+W`, or "Random Wallpaper" in
+the launcher. It downloads one random image, shows it full-size, and waits:
+
+| key | button | effect |
+|---|---|---|
+| `S` / `Return` | Save | move it into `~/random_wallpaper/`, then fetch the next |
+| `D` / `Delete` | Delete | unlink the download and close |
+| `N` / `Space` | Next | discard this one, fetch another |
+| `Esc` | — | close; the unsaved download is discarded |
+
+Sources are Konachan (`rating:safe`) and Wallhaven (`purity=100`,
+`categories=110`), switchable in the header bar. `--source konachan|wallhaven`
+picks the startup one.
+
+`~/random_wallpaper` is hardcoded and created on first save. **Saving cannot
+destroy an earlier wallpaper**: downloads live in `~/.cache/random-wallpaper`
+until you accept one, and the save path is uniquified (`-2`, `-3`, …) rather
+than overwritten. This is the one thing iNiR's `random_konachan_wall.sh` got
+wrong — it wrote every download to the same `random_wallpaper.jpg`.
+
+"Set as wallpaper on save" calls `noctalia msg wallpaper-set`. If that fails
+the toast says so, but the file is still saved.
+
+The osu! seasonal-backgrounds endpoint the old script used now returns 403 —
+it moved behind OAuth — so Wallhaven replaced it.
 
 ## fish
 
@@ -66,6 +100,26 @@ Needs `starship` and `eza`, both installed by the script.
 `~/.config/fish/conf.d/secrets.fish`, which is gitignored — copy
 `dots/fish/conf.d/secrets.fish.example` and fill it in. Never put a key in a
 tracked file; removing it in a later commit does not remove it from history.
+
+## Neovim
+
+`bootstrap.sh` clones [LVim](https://github.com/ivanovichelovek/LVim) (a LazyVim
+fork) into `~/.config/nvim` over https, then switches `origin` to ssh and adds
+`upstream` pointing at LazyVim. It skips the clone if `~/.config/nvim` already
+exists. The first `nvim` run installs plugins and needs network.
+
+## kitty
+
+`dots/kitty` is symlinked to `~/.config/kitty`. `kitty.conf` carries the
+JetBrains Mono Nerd Font setting, the 21.75px margin and
+`background_opacity 0.85` — if the terminal is opaque, this symlink is missing.
+
+`kitty.conf` includes `current-theme.conf`, which Noctalia's template system
+overwrites on every wallpaper change; it is gitignored and seeded from the
+tracked `theme.conf` at install time.
+
+`ctrl+f` maps to a `search.py` kitten that is not shipped here — the binding
+does nothing until you drop that kitten into `~/.config/kitty`.
 
 ## Hardware
 
@@ -119,6 +173,7 @@ owns every shortcut and forwards it over IPC. Bind keys here; run
 | `Mod+Alt+L` | lock |
 | `Mod+Slash` | niri hotkey cheatsheet *(was iNiR's own)* |
 | `Alt+Tab` | window switcher |
+| `Ctrl+Alt+W` | random wallpaper previewer *(new)* |
 
 Volume, brightness and media keys route through `noctalia msg` for OSD feedback.
 
