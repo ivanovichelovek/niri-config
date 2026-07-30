@@ -24,7 +24,7 @@ SKIP_WALLPAPERS=0
 GREETER="regreet"   # regreet | noctalia | tuigreet | none
 
 usage() {
-    sed -n '2,20p' "$0" | sed 's/^# \?//'
+    sed -n '2,16p' "$0" | sed 's/^# \?//'
     cat <<'EOF'
 
 Options:

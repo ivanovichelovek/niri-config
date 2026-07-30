@@ -85,8 +85,16 @@ until you accept one, and the save path is uniquified (`-2`, `-3`, …) rather
 than overwritten. This is the one thing iNiR's `random_konachan_wall.sh` got
 wrong — it wrote every download to the same `random_wallpaper.jpg`.
 
+Every save is also hardlinked into `~/Pictures/Wallpapers` — that is the
+directory Noctalia's picker and `wallpaper-random` scan, and `~/random_wallpaper`
+is not. Same filesystem, so the link costs no extra space, and the name is
+uniquified there too. Deleting from one place leaves the other copy.
+
 "Set as wallpaper on save" calls `noctalia msg wallpaper-set`. If that fails
 the toast says so, but the file is still saved.
+
+`tests/test-random-wallpaper.py` asserts the non-destructive properties against
+a throwaway `$HOME` (needs network — it does one real download per source).
 
 The osu! seasonal-backgrounds endpoint the old script used now returns 403 —
 it moved behind OAuth — so Wallhaven replaced it.

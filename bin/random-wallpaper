@@ -39,6 +39,28 @@ SAVE_DIR = Path.home() / "random_wallpaper"
 
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "random-wallpaper"
 
+
+def pictures_wallpapers():
+    """Noctalia's picker and its wallpaper-random rotation scan this directory,
+    not SAVE_DIR, so saved images are linked into it as well."""
+    try:
+        out = subprocess.run(
+            ["xdg-user-dir", "PICTURES"], capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except (subprocess.SubprocessError, OSError):
+        out = ""
+    return Path(out or Path.home() / "Pictures") / "Wallpapers"
+
+
+def prune_cache():
+    """Drop downloads orphaned by a crash or a kill — they were never accepted,
+    so nothing references them."""
+    for stale in CACHE_DIR.glob("pending-*"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
 # Konachan blocks the default urllib agent.
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -369,11 +391,29 @@ class Window(Adw.ApplicationWindow):
         shutil.move(str(self.current["path"]), dest)
         self.current = None
 
+        self.link_into_pictures(dest)
         if self.set_wall.get_active():
             self.apply_wallpaper(dest)
 
         self.toasts.add_toast(Adw.Toast(title=f"Saved to {dest}", timeout=4))
         self.fetch()
+
+    def link_into_pictures(self, saved):
+        """Hardlink the saved file into ~/Pictures/Wallpapers so it shows up in
+        Noctalia's picker. Hardlink, not copy: same filesystem, no extra bytes.
+        Uniquified like the save itself, so it cannot overwrite anything."""
+        try:
+            directory = pictures_wallpapers()
+            directory.mkdir(parents=True, exist_ok=True)
+            link = unique_path(directory, saved.stem, saved.suffix)
+            try:
+                os.link(saved, link)
+            except OSError:
+                link.symlink_to(saved)   # different filesystem
+        except OSError as exc:
+            self.toasts.add_toast(
+                Adw.Toast(title=f"Saved, but not linked into Pictures: {exc}")
+            )
 
     def apply_wallpaper(self, path):
         try:
@@ -437,6 +477,9 @@ def main():
         help="which site to fetch from (default: %(default)s)",
     )
     args = parser.parse_args()
+
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    prune_cache()
 
     Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.PREFER_DARK)
     App(names.index(args.source)).run([])
