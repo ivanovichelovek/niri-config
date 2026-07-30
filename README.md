@@ -33,10 +33,10 @@ Requires: `niri`, `noctalia`, `kitty`, `fish`, `zen-browser`, `google-chrome`,
 `telegram-desktop`, `yandex-music`, `happ-desktop-bin`, `nautilus`, `cliphist`,
 `wl-clipboard`, and a polkit agent — `bootstrap.sh` installs all of them.
 
-Not included here and referenced by the config: `wlsunset-restart` (used by
-`bin/lock-and-suspend`) and `niri-nvim-touchpad` (spawned by
-`config.d/90-user-extra.kdl`). Both come from the old dotfiles; the bootstrap
-script warns if the second one is missing.
+All four helper scripts live in `bin/` and are symlinked into `~/.local/bin`:
+`lock-and-suspend`, `niri-toggle-gaps`, `niri-nvim-touchpad` (spawned by
+`config.d/90-user-extra.kdl`) and `wlsunset-restart` (called by
+`lock-and-suspend`).
 
 ## Layout
 

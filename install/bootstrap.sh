@@ -117,6 +117,8 @@ PKGS=(
     telegram-desktop nautilus
     # clipboard / screenshot / media
     cliphist wl-clipboard grim slurp
+    # night-light — bin/wlsunset-restart drives it, bin/lock-and-suspend calls that
+    wlsunset
     # audio
     pipewire pipewire-pulse pipewire-alsa wireplumber
     # fonts
@@ -205,7 +207,7 @@ else
     as_user ln -s "$REPO_ROOT" "$NIRI_CFG"
     info "$NIRI_CFG -> $REPO_ROOT"
 
-    for s in lock-and-suspend niri-toggle-gaps; do
+    for s in lock-and-suspend niri-toggle-gaps niri-nvim-touchpad wlsunset-restart; do
         as_user ln -sf "$REPO_ROOT/bin/$s" "$USER_HOME/.local/bin/$s"
     done
     info "helper scripts linked into ~/.local/bin"
@@ -218,13 +220,6 @@ else
             as_user sed -i "s|/home/ivanc|$USER_HOME|g" "${HARDCODED[@]}"
             info "rewrote /home/ivanc -> $USER_HOME in ${#HARDCODED[@]} file(s)"
         fi
-    fi
-
-    # niri-nvim-touchpad is referenced by 90-user-extra.kdl but lives outside
-    # this repo — it came from the old dotfiles.
-    if [[ ! -x $USER_HOME/.local/bin/niri-nvim-touchpad ]]; then
-        warn "~/.local/bin/niri-nvim-touchpad is missing (spawn-at-startup in 90-user-extra.kdl)"
-        TODO+=("copy niri-nvim-touchpad into ~/.local/bin, or delete that spawn-at-startup line")
     fi
 
     if command -v niri >/dev/null; then

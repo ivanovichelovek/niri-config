@@ -1,0 +1,53 @@
+#!/usr/bin/bash
+# Restart wlsunset after system resume to prevent gamma stacking on AMD DCN.
+# After S3 deep sleep, wlsunset reconnects and re-applies its gamma LUT on top
+# of whatever state the hardware left — causing a double-warm effect (dark red).
+# Killing and restarting it forces a clean gamma write from neutral.
+
+pkill -x wlsunset 2>/dev/null || true
+sleep 0.5
+
+config="$HOME/.config/quickshell/inir/defaults/config.json"
+user_config="$HOME/.local/state/quickshell/user/config.json"
+[[ -f "$user_config" ]] && config="$user_config"
+
+temp=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$config'))
+    print(d.get('light',{}).get('night',{}).get('colorTemperature', 5000))
+except Exception:
+    print(5000)
+" 2>/dev/null || echo 5000)
+
+from_t=$(python3 -c "
+import json
+try:
+    d = json.load(open('$config'))
+    print(d.get('light',{}).get('night',{}).get('from','19:00'))
+except Exception:
+    print('19:00')
+" 2>/dev/null || echo "19:00")
+
+to_t=$(python3 -c "
+import json
+try:
+    d = json.load(open('$config'))
+    print(d.get('light',{}).get('night',{}).get('to','06:30'))
+except Exception:
+    print('06:30')
+" 2>/dev/null || echo "06:30")
+
+from_m=$(echo "$from_t" | awk -F: '{printf "%d", $1*60+$2}')
+to_m=$(echo "$to_t"   | awk -F: '{printf "%d", $1*60+$2}')
+now_m=$(date +%H%M | awk '{printf "%d", substr($0,1,2)*60+substr($0,3,2)}')
+
+# Check if we're in night-light window (wraps midnight when from > to)
+active=0
+if (( from_m > to_m )); then
+    (( now_m >= from_m || now_m <= to_m )) && active=1
+else
+    (( now_m >= from_m && now_m <= to_m )) && active=1
+fi
+
+(( active )) && exec /usr/bin/wlsunset -T 6500 -t "$temp" -s 00:00 -S 23:59

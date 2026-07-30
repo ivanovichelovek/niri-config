@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Disable the touchpad while the nvim window (app-id="nvim") is focused.
+
+Runs as a niri-spawned daemon. Watches niri's event stream and takes an
+exclusive EVIOCGRAB on the touchpad's evdev node whenever the focused window
+is nvim, releasing it otherwise. Fail-open: any error or exit releases the
+grab, so the touchpad can never get stuck disabled.
+"""
+import fcntl
+import glob
+import json
+import os
+import signal
+import subprocess
+import sys
+
+EVIOCGRAB = 0x40044590  # _IOW('E', 0x90, int)
+NVIM_APP_ID = "nvim"
+
+
+def find_touchpad():
+    for ev in sorted(glob.glob("/dev/input/event*")):
+        namef = f"/sys/class/input/{os.path.basename(ev)}/device/name"
+        try:
+            if "touchpad" in open(namef).read().strip().lower():
+                return ev
+        except OSError:
+            continue
+    return None
+
+
+class Grabber:
+    def __init__(self, node):
+        self.node = node
+        self.fd = None  # open only while grabbed
+
+    def set(self, want):
+        if want and self.fd is None:
+            self.fd = os.open(self.node, os.O_RDONLY)
+            fcntl.ioctl(self.fd, EVIOCGRAB, 1)
+        elif not want and self.fd is not None:
+            try:
+                fcntl.ioctl(self.fd, EVIOCGRAB, 0)
+            finally:
+                os.close(self.fd)
+                self.fd = None
+
+    def release(self, *_):
+        try:
+            self.set(False)
+        finally:
+            sys.exit(0)
+
+
+def main():
+    node = find_touchpad()
+    if not node:
+        sys.exit("niri-nvim-touchpad: no touchpad device found")
+
+    grab = Grabber(node)
+    signal.signal(signal.SIGTERM, grab.release)
+    signal.signal(signal.SIGINT, grab.release)
+
+    app_by_id = {}     # window id -> app_id
+    focused_id = None
+
+    def refocus():
+        grab.set(app_by_id.get(focused_id) == NVIM_APP_ID)
+
+    proc = subprocess.Popen(
+        ["niri", "msg", "--json", "event-stream"],
+        stdout=subprocess.PIPE, text=True,
+    )
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if "WindowsChanged" in ev:
+                app_by_id.clear()
+                for w in ev["WindowsChanged"]["windows"]:
+                    app_by_id[w["id"]] = w.get("app_id")
+                    if w.get("is_focused"):
+                        focused_id = w["id"]
+                refocus()
+            elif "WindowOpenedOrChanged" in ev:
+                w = ev["WindowOpenedOrChanged"]["window"]
+                app_by_id[w["id"]] = w.get("app_id")
+                if w.get("is_focused"):
+                    focused_id = w["id"]
+                refocus()
+            elif "WindowClosed" in ev:
+                app_by_id.pop(ev["WindowClosed"]["id"], None)
+                refocus()
+            elif "WindowFocusChanged" in ev:
+                focused_id = ev["WindowFocusChanged"].get("id")
+                refocus()
+    finally:
+        grab.set(False)
+        proc.terminate()
+
+
+if __name__ == "__main__":
+    main()
