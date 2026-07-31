@@ -243,7 +243,7 @@ else
     as_user ln -s "$REPO_ROOT" "$NIRI_CFG"
     info "$NIRI_CFG -> $REPO_ROOT"
 
-    for s in lock-and-suspend niri-toggle-gaps niri-nvim-touchpad wlsunset-restart \
+    for s in lock-and-suspend niri-toggle-gaps wlsunset-restart \
              random-wallpaper claude-state; do
         as_user ln -sf "$REPO_ROOT/bin/$s" "$USER_HOME/.local/bin/$s"
     done
@@ -516,21 +516,6 @@ EOF
     systemctl enable greetd.service
     info "enabled greetd.service — disable it any time with: systemctl disable greetd"
 fi
-
-# ─── udev ───────────────────────────────────────────────────────────────────
-step "udev rules"
-
-# niri-nvim-touchpad grabs the touchpad's evdev nodes while nvim is focused,
-# which needs read access to them. The rule hands the active seat's user an ACL
-# on the touchpad alone — deliberately not `usermod -aG input`, which would give
-# every process running as that user a read channel on the keyboard too.
-install -m 0644 "$REPO_ROOT/etc/udev/rules.d/71-touchpad-uaccess.rules" \
-    /etc/udev/rules.d/71-touchpad-uaccess.rules
-udevadm control --reload
-# --action=change re-runs the rules on devices that already exist, so the ACL
-# appears now instead of only after the next reboot or replug.
-udevadm trigger --subsystem-match=input --action=change
-info "touchpad evdev ACL installed (needed by niri-nvim-touchpad)"
 
 # ─── services ───────────────────────────────────────────────────────────────
 step "Services"

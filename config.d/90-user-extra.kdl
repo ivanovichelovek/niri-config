@@ -12,11 +12,6 @@
 //
 // Examples:
 //
-// Disable the touchpad while the nvim window (app-id="nvim") is focused.
-// Daemon takes an exclusive EVIOCGRAB on the touchpad; fail-open (releases on
-// exit, so it can never lock you out). Source: ~/.local/bin/niri-nvim-touchpad
-spawn-at-startup "/home/ivanc/.local/bin/niri-nvim-touchpad"
-
 // Named workspaces (sticky, always present)
 workspace "term"
 workspace "web"

@@ -39,25 +39,14 @@ Requires: `niri`, `noctalia`, `kitty`, `fish`, `zen-browser`, `google-chrome`,
 `wl-clipboard`, and a polkit agent — `bootstrap.sh` installs all of them.
 
 All helper scripts live in `bin/` and are symlinked into `~/.local/bin`:
-`lock-and-suspend`, `niri-toggle-gaps`, `random-wallpaper`, `niri-nvim-touchpad`
-(spawned by `config.d/90-user-extra.kdl`) and `wlsunset-restart` (called by
-`lock-and-suspend`).
+`lock-and-suspend`, `niri-toggle-gaps`, `random-wallpaper` and
+`wlsunset-restart` (called by `lock-and-suspend`).
 
-`niri-nvim-touchpad` disables the touchpad while the nvim window (app-id
-`nvim`) is focused, by taking an exclusive `EVIOCGRAB` on its evdev nodes. That
-needs read access to them, which comes from `etc/udev/rules.d/`— `bootstrap.sh`
-installs it; installing by hand:
-
-```fish
-sudo install -m 0644 ~/GitHub/niri-config/etc/udev/rules.d/71-touchpad-uaccess.rules /etc/udev/rules.d/
-sudo udevadm control --reload
-sudo udevadm trigger --subsystem-match=input --action=change
-getfacl /dev/input/event7   # should list user:<you>:rw-
-```
-
-The rule grants an ACL on the touchpad to the active seat's user, rather than
-adding the user to the `input` group, which would expose the keyboard too. The
-daemon fails open — any error, and any exit, releases the grab.
+Stray touchpad clicks in nvim are handled in nvim itself (`mouse = ""` in
+`~/.config/nvim/lua/config/options.lua`), not by disabling the device. An
+earlier `niri-nvim-touchpad` daemon did the latter with an `EVIOCGRAB` and is
+gone: it needed a privileged ACL on the input device and killed the pad
+wholesale, including mouse focus switching.
 
 `--skip-wallpapers` leaves `~/Pictures/Wallpapers` alone; otherwise the 28
 images in `wallpapers/` are copied there. The copy uses `cp -n`, so re-running
