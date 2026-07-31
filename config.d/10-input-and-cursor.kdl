@@ -85,7 +85,7 @@ gestures {
 // ── Cursor theme ────────────────────────────────────────────────────────────
 cursor {
     xcursor-theme "capitaine-cursors-light"
-    xcursor-size 24
+    xcursor-size 12
     hide-when-typing
 }
 
