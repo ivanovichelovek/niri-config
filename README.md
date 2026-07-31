@@ -43,6 +43,22 @@ All helper scripts live in `bin/` and are symlinked into `~/.local/bin`:
 (spawned by `config.d/90-user-extra.kdl`) and `wlsunset-restart` (called by
 `lock-and-suspend`).
 
+`niri-nvim-touchpad` disables the touchpad while the nvim window (app-id
+`nvim`) is focused, by taking an exclusive `EVIOCGRAB` on its evdev nodes. That
+needs read access to them, which comes from `etc/udev/rules.d/`— `bootstrap.sh`
+installs it; installing by hand:
+
+```fish
+sudo install -m 0644 ~/GitHub/niri-config/etc/udev/rules.d/71-touchpad-uaccess.rules /etc/udev/rules.d/
+sudo udevadm control --reload
+sudo udevadm trigger --subsystem-match=input --action=change
+getfacl /dev/input/event7   # should list user:<you>:rw-
+```
+
+The rule grants an ACL on the touchpad to the active seat's user, rather than
+adding the user to the `input` group, which would expose the keyboard too. The
+daemon fails open — any error, and any exit, releases the grab.
+
 `--skip-wallpapers` leaves `~/Pictures/Wallpapers` alone; otherwise the 28
 images in `wallpapers/` are copied there. The copy uses `cp -n`, so re-running
 the script never overwrites anything you have added since.

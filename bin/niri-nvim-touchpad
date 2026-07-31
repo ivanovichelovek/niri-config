@@ -2,9 +2,12 @@
 """Disable the touchpad while the nvim window (app-id="nvim") is focused.
 
 Runs as a niri-spawned daemon. Watches niri's event stream and takes an
-exclusive EVIOCGRAB on the touchpad's evdev node whenever the focused window
+exclusive EVIOCGRAB on the touchpad's evdev nodes whenever the focused window
 is nvim, releasing it otherwise. Fail-open: any error or exit releases the
 grab, so the touchpad can never get stuck disabled.
+
+Access to the evdev nodes comes from /etc/udev/rules.d/71-touchpad-uaccess.rules
+(a per-seat ACL); without it every open() here fails with EACCES.
 """
 import fcntl
 import glob
@@ -18,32 +21,65 @@ EVIOCGRAB = 0x40044590  # _IOW('E', 0x90, int)
 NVIM_APP_ID = "nvim"
 
 
-def find_touchpad():
-    for ev in sorted(glob.glob("/dev/input/event*")):
-        namef = f"/sys/class/input/{os.path.basename(ev)}/device/name"
+def log(msg):
+    print(f"niri-nvim-touchpad: {msg}", file=sys.stderr, flush=True)
+
+
+def hid_parent(node):
+    """Physical device directory behind an evdev node (.../0018:093A:0255.0001)."""
+    link = f"/sys/class/input/{os.path.basename(node)}/device"
+    return os.path.dirname(os.path.dirname(os.path.realpath(link)))
+
+
+def find_touchpad_nodes():
+    """Every evdev node of the physical touchpad.
+
+    One I2C-HID touchpad usually exposes several nodes ("... Touchpad" plus a
+    sibling "... Mouse"); grabbing only one of them leaves the pad half-alive,
+    so collect all nodes sharing the touchpad's parent HID device.
+    """
+    nodes = sorted(glob.glob("/dev/input/event*"))
+    pads = []
+    for ev in nodes:
         try:
-            if "touchpad" in open(namef).read().strip().lower():
-                return ev
+            name = open(f"/sys/class/input/{os.path.basename(ev)}/device/name").read()
         except OSError:
             continue
-    return None
+        if "touchpad" in name.strip().lower():
+            pads.append(ev)
+    if not pads:
+        return []
+    parents = {hid_parent(ev) for ev in pads}
+    return [ev for ev in nodes if hid_parent(ev) in parents]
 
 
 class Grabber:
-    def __init__(self, node):
-        self.node = node
-        self.fd = None  # open only while grabbed
+    def __init__(self, nodes):
+        self.nodes = nodes
+        self.fds = {}  # node -> fd, open only while grabbed
 
     def set(self, want):
-        if want and self.fd is None:
-            self.fd = os.open(self.node, os.O_RDONLY)
-            fcntl.ioctl(self.fd, EVIOCGRAB, 1)
-        elif not want and self.fd is not None:
-            try:
-                fcntl.ioctl(self.fd, EVIOCGRAB, 0)
-            finally:
-                os.close(self.fd)
-                self.fd = None
+        if want:
+            for node in self.nodes:
+                if node in self.fds:
+                    continue
+                try:
+                    fd = os.open(node, os.O_RDONLY)
+                    fcntl.ioctl(fd, EVIOCGRAB, 1)
+                except OSError as e:
+                    # Fail open on this node rather than kill the daemon.
+                    log(f"cannot grab {node}: {e}")
+                    continue
+                self.fds[node] = fd
+        else:
+            for node, fd in list(self.fds.items()):
+                try:
+                    fcntl.ioctl(fd, EVIOCGRAB, 0)
+                except OSError as e:
+                    log(f"cannot ungrab {node}: {e}")
+                finally:
+                    os.close(fd)
+                    del self.fds[node]
 
     def release(self, *_):
         try:
@@ -53,11 +89,12 @@ class Grabber:
 
 
 def main():
-    node = find_touchpad()
-    if not node:
+    nodes = find_touchpad_nodes()
+    if not nodes:
         sys.exit("niri-nvim-touchpad: no touchpad device found")
+    log(f"watching {' '.join(nodes)}")
 
-    grab = Grabber(node)
+    grab = Grabber(nodes)
     signal.signal(signal.SIGTERM, grab.release)
     signal.signal(signal.SIGINT, grab.release)
 
