@@ -15,6 +15,19 @@ cd ~/GitHub/niri-config
 sudo ./install/bootstrap.sh
 ```
 
+It asks who it is installing for first, offering the user who ran `sudo`;
+`--user <name>` answers that up front for an unattended run. The name matters
+because the config carries absolute paths from the machine it was written on —
+`/home/ivanc/...` in binds, `dots/noctalia/settings.toml`, `dots/happ/routing.json`
+and the `.desktop` files — and they are rewritten to that user's home. This
+edits tracked files, so `git status` shows them modified afterwards on any
+machine that is not the original one; there is nothing to commit back.
+
+The bare name is left alone, only `/home/ivanc` is replaced.
+`dev.ivanc.RandomWallpaper` is a reverse-DNS application id, matched by a window
+rule in `90-user-extra.kdl` and by the icon's file name — renaming it would
+break both and gain nothing.
+
 By hand instead:
 
 ```fish

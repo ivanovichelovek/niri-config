@@ -22,6 +22,7 @@ SKIP_GREETER=0
 SKIP_LINK=0
 SKIP_WALLPAPERS=0
 GREETER="regreet"   # regreet | noctalia | tuigreet | none
+USER_NAME=""        # empty: ask, defaulting to $SUDO_USER
 
 usage() {
     sed -n '2,16p' "$0" | sed 's/^# \?//'
@@ -33,6 +34,7 @@ Options:
   --skip-link        install packages only, don't touch ~/.config
   --skip-wallpapers  don't copy wallpapers/ into ~/Pictures/Wallpapers
   --greeter <name>   regreet (default) | noctalia | tuigreet | none
+  --user <name>      install for this user (default: ask, offering $SUDO_USER)
   -h, --help         this text
 EOF
 }
@@ -44,6 +46,7 @@ while [[ $# -gt 0 ]]; do
         --skip-link)    SKIP_LINK=1; shift ;;
         --skip-wallpapers) SKIP_WALLPAPERS=1; shift ;;
         --greeter)      GREETER=${2:?--greeter needs a value}; shift 2 ;;
+        --user)         USER_NAME=${2:?--user needs a value}; shift 2 ;;
         -h|--help)      usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage; exit 1 ;;
     esac
@@ -67,8 +70,22 @@ fi
 
 command -v pacman >/dev/null || { echo "pacman not found — this is not Arch" >&2; exit 1; }
 
-USER_NAME=$SUDO_USER
-USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6)
+# ─── who this is being installed for ────────────────────────────────────────
+# Asked here, before anything is installed, because the config carries absolute
+# paths from the machine it was written on (/home/ivanc/…) and they are
+# rewritten to this user's home further down.
+if [[ -z $USER_NAME ]]; then
+    if [[ -t 0 ]]; then
+        read -rp "install for which user? [$SUDO_USER] " USER_NAME
+    fi
+    USER_NAME=${USER_NAME:-$SUDO_USER}
+fi
+
+[[ $USER_NAME != root ]] || { echo "refusing to install for root" >&2; exit 1; }
+# getent exits 2 for an unknown user and `set -o pipefail` would take that as
+# the value of the whole substitution, killing the script without a word.
+USER_HOME=$({ getent passwd "$USER_NAME" || true; } | cut -d: -f6)
+[[ -n $USER_HOME ]] || { echo "no such user: $USER_NAME" >&2; exit 1; }
 [[ -d $USER_HOME ]] || { echo "home directory for $USER_NAME not found" >&2; exit 1; }
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -99,6 +116,13 @@ TODO=()
 echo "user:   $USER_NAME ($USER_HOME)"
 echo "config: $REPO_ROOT"
 echo "greeter: $([[ $SKIP_GREETER == 1 ]] && echo "skipped" || echo "$GREETER")"
+
+# yay builds as this user and calls sudo itself to install what it built. That
+# is password-less only for the user who ran this script.
+if [[ $USER_NAME != "$SUDO_USER" ]]; then
+    warn "installing for $USER_NAME but sudo was run by $SUDO_USER —"
+    warn "the AUR step will ask for $USER_NAME's password"
+fi
 
 # ─── packages from the official repos ───────────────────────────────────────
 step "Official packages"
@@ -267,9 +291,14 @@ else
     info "app icons linked into ~/.local/share/icons"
 
     # The config was written on a machine where $HOME was /home/ivanc. Rewrite
-    # any absolute paths so it works for whoever is installing it. dots/ is
-    # included: noctalia's settings.toml points at wallpapers by absolute path,
-    # Happ's routing.json at an asset directory, and gp8.fish at a wine prefix.
+    # any absolute paths for the user chosen at the start. dots/ is included:
+    # noctalia's settings.toml points at wallpapers by absolute path, Happ's
+    # routing.json at an asset directory, and gp8.fish at a wine prefix.
+    #
+    # Only the path is rewritten, never the bare name. `dev.ivanc.RandomWallpaper`
+    # is a reverse-DNS application id, matched by the window rule in
+    # 90-user-extra.kdl and by the icon file name — renaming it would break both
+    # and buys nothing.
     #
     # This edits tracked files, so `git status` in the repo will show them as
     # modified afterwards. That is expected on a machine with a different
