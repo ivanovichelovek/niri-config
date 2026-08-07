@@ -145,6 +145,7 @@ PKGS=(
     # shell + terminal + editor (starship and eza are used by dots/fish)
     fish kitty neovim micro starship eza
     # noctalia runtime deps that live in the official repos
+    # (imagemagick also resizes the wallpaper in bin/noctalia-telegram-theme)
     imagemagick brightnessctl ffmpeg wlr-randr python libqalculate
     # bin/random-wallpaper is a GTK4 app (no libadwaita — it ships its own
     # theme); it talks to both wallpaper APIs with stdlib urllib.
@@ -244,7 +245,7 @@ else
     info "$NIRI_CFG -> $REPO_ROOT"
 
     for s in lock-and-suspend niri-toggle-gaps wlsunset-restart \
-             random-wallpaper claude-state; do
+             random-wallpaper claude-state noctalia-telegram-theme; do
         as_user ln -sf "$REPO_ROOT/bin/$s" "$USER_HOME/.local/bin/$s"
     done
     info "helper scripts linked into ~/.local/bin"
@@ -333,6 +334,20 @@ else
     info "$KITTY_CFG/kitty.conf -> $REPO_ROOT/dots/kitty/kitty.conf"
     # No TODO here: dots/noctalia/settings.toml enables the kitty template, so
     # colours follow the wallpaper from first login.
+
+    step "telegram palette template"
+    # The template noctalia-telegram-theme renders. It is config, not generated
+    # output, so the directory is symlinked into the repo like kitty.conf is;
+    # the script writes its rendered copy to a temp dir, never here.
+    TG_TEMPLATE_DIR="$USER_HOME/.config/noctalia/telegram"
+    as_user mkdir -p "$USER_HOME/.config/noctalia"
+    if [[ -e $TG_TEMPLATE_DIR && ! -L $TG_TEMPLATE_DIR ]]; then
+        as_user mv "$TG_TEMPLATE_DIR" "$TG_TEMPLATE_DIR.bak.$(date +%Y%m%d%H%M%S)"
+    fi
+    as_user ln -sfn "$REPO_ROOT/dots/telegram" "$TG_TEMPLATE_DIR"
+    info "$TG_TEMPLATE_DIR -> $REPO_ROOT/dots/telegram"
+    # The theme file itself cannot be applied from outside Telegram.
+    TODO+=("Telegram: Settings -> Chat Settings -> Themes -> ... -> Open theme file, pick ~/.config/telegram-desktop/themes/noctalia.tdesktop-theme")
 
     step "neovim (LVim)"
     NVIM_CFG="$USER_HOME/.config/nvim"

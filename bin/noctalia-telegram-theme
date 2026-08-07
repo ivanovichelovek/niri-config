@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# Build a Telegram Desktop theme (.tdesktop-theme) from the current Noctalia
+# palette + the current system wallpaper.
+#
+# Wired into Noctalia as a `colors_changed` hook (see ~/.local/state/noctalia/
+# settings.toml), so it runs on every wallpaper / theme change. Also usable by
+# hand:
+#
+#   noctalia-telegram-theme            # rebuild the theme file
+#   noctalia-telegram-theme --restart  # rebuild and restart Telegram
+#
+# Telegram cannot be told to reload a theme from the outside: it re-reads the
+# theme file only at startup, and the file has to be opened from inside
+# Telegram once (see --help).
+set -euo pipefail
+
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+# ~/.config/noctalia/telegram is a symlink into the niri-config repo; nothing
+# generated is written there.
+template="${NOCTALIA_TG_TEMPLATE:-$config_home/noctalia/telegram/colors.tdesktop-theme}"
+out_file="$config_home/telegram-desktop/themes/noctalia.tdesktop-theme"
+flat_file="$config_home/telegram-desktop/themes/noctalia-flat.tdesktop-theme"
+restart=0
+
+usage() {
+    cat <<EOF
+Usage: noctalia-telegram-theme [--restart] [--help]
+
+Renders $template with the current
+Noctalia palette, packs it together with the current wallpaper and writes
+two themes:
+
+  $out_file
+  $flat_file
+      the same theme without the thin separators between the panels
+
+  --restart   restart Telegram afterwards so the new colors take effect
+              (Telegram only re-reads the theme file on startup)
+
+One-time setup inside Telegram:
+  Settings -> Chat Settings -> Themes -> three dots -> Open theme file,
+  then pick $out_file
+EOF
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --restart) restart=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "unknown argument: $arg" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+# A wallpaper change can fire several hooks within milliseconds; the runs would
+# fight over the same scratch files. Any of them produces identical output, so
+# the first one wins and the rest bail out.
+exec 9>"${XDG_RUNTIME_DIR:-/tmp}/noctalia-telegram-theme.lock"
+flock -n 9 || exit 0
+
+[ -f "$template" ] || { echo "missing palette template $template" >&2; exit 1; }
+
+wallpaper="$(noctalia msg wallpaper-get 2>/dev/null | tail -n1)"
+[ -n "$wallpaper" ] && [ -f "$wallpaper" ] || {
+    echo "could not determine the current wallpaper" >&2
+    exit 1
+}
+
+# Which variant of the palette to use. "light" gives panels that actually carry
+# the wallpaper's tint; the dark variant of Material You is almost neutral grey.
+# Override with NOCTALIA_TG_MODE=dark or =auto (follow the shell's theme mode).
+mode="${NOCTALIA_TG_MODE:-light}"
+if [ "$mode" = "auto" ]; then
+    mode="$(noctalia msg theme-mode-get 2>/dev/null | tail -n1)"
+fi
+[ "$mode" = "dark" ] || mode="light"
+
+# "<source> <name>", e.g. "wallpaper m3-tonal-spot"
+read -r scheme_source scheme_name <<<"$(noctalia msg color-scheme-get 2>/dev/null | tail -n1)"
+if [ "$scheme_source" != "wallpaper" ]; then
+    # A fixed palette is active in the shell; colors are still derived from the
+    # wallpaper here, so they may differ slightly from the rest of the desktop.
+    scheme_name="m3-tonal-spot"
+fi
+
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+
+cat >"$tmp_dir/template.toml" <<EOF
+[templates.telegram]
+input_path = "$template"
+output_path = "$tmp_dir/colors.tdesktop-theme"
+EOF
+
+noctalia theme "$wallpaper" --scheme "$scheme_name" --default-mode "$mode" \
+    -c "$tmp_dir/template.toml" >/dev/null
+
+# Telegram wants a reasonably sized JPEG for the chat background.
+magick "$wallpaper" -auto-orient -resize '1920x1920>' \
+    -quality 85 -strip "$tmp_dir/background.jpg"
+
+pack() {  # pack <output>
+    python3 - "$tmp_dir" "$1" <<'PY'
+import os, sys, zipfile
+src, dst = sys.argv[1], sys.argv[2]
+tmp = dst + ".part"
+with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+    for name in ("colors.tdesktop-theme", "background.jpg"):
+        path = os.path.join(src, name)
+        if os.path.exists(path):
+            z.write(path, name)
+os.replace(tmp, dst)
+PY
+    echo "wrote $1"
+}
+
+mkdir -p "$(dirname "$out_file")"
+pack "$out_file"
+
+# Same theme, but with the thin separators between the panels turned off.
+sed -i -E 's/^(shadowFg|titleShadow): .*/\1: #00000000;/' \
+    "$tmp_dir/colors.tdesktop-theme"
+pack "$flat_file"
+
+if [ "$restart" = 1 ] && pgrep -x Telegram >/dev/null; then
+    pkill -x Telegram || true
+    for _ in $(seq 20); do
+        pgrep -x Telegram >/dev/null || break
+        sleep 0.25
+    done
+    setsid Telegram >/dev/null 2>&1 &
+    echo "restarted Telegram"
+fi

@@ -1,5 +1,13 @@
 config_version = 8
 
+# Telegram Desktop has no template of its own: it wants a zipped .tdesktop-theme
+# with the wallpaper inside, so bin/noctalia-telegram-theme builds one instead.
+# Both events fire on a wallpaper change; the script takes a lock and the second
+# run exits immediately.
+[hooks]
+colors_changed = [ "~/.local/bin/noctalia-telegram-theme" ]
+wallpaper_changed = [ "~/.local/bin/noctalia-telegram-theme" ]
+
 [lockscreen_widgets]
 enabled = false
 schema_version = 2

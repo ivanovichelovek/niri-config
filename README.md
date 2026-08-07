@@ -31,6 +31,10 @@ mkdir -p ~/.config/kitty/themes
 ln -s ~/GitHub/niri-config/dots/kitty/kitty.conf ~/.config/kitty/kitty.conf
 cp    ~/GitHub/niri-config/dots/kitty/theme.conf ~/.config/kitty/themes/noctalia.conf
 
+# telegram: the palette template the noctalia hook renders
+mkdir -p ~/.config/noctalia
+ln -s ~/GitHub/niri-config/dots/telegram ~/.config/noctalia/telegram
+
 niri validate            # should print "config is valid"
 ```
 
@@ -39,8 +43,9 @@ Requires: `niri`, `noctalia`, `kitty`, `fish`, `zen-browser`, `google-chrome`,
 `wl-clipboard`, and a polkit agent — `bootstrap.sh` installs all of them.
 
 All helper scripts live in `bin/` and are symlinked into `~/.local/bin`:
-`lock-and-suspend`, `niri-toggle-gaps`, `random-wallpaper` and
-`wlsunset-restart` (called by `lock-and-suspend`).
+`lock-and-suspend`, `niri-toggle-gaps`, `random-wallpaper`,
+`noctalia-telegram-theme` and `wlsunset-restart` (called by
+`lock-and-suspend`).
 
 Stray touchpad clicks in nvim are handled in nvim itself (`mouse = ""` in
 `~/.config/nvim/lua/config/options.lua`), not by disabling the device. An
@@ -192,6 +197,67 @@ middle. A non-zero margin also forces kitty to draw window borders.
 `ctrl+f` maps to a `search.py` kitten that is not shipped here — the binding
 does nothing until you drop that kitten into `~/.config/kitty`.
 
+## Telegram
+
+Telegram Desktop follows the wallpaper too: `bin/noctalia-telegram-theme` builds
+a `.tdesktop-theme` from the current Noctalia palette and the current wallpaper,
+driven by the `colors_changed` and `wallpaper_changed` hooks in
+`dots/noctalia/settings.toml`.
+
+It is a hook rather than a noctalia template because a Telegram theme is not a
+text file: it is a **zip** holding `colors.tdesktop-theme` and a
+`background.jpg`, and the template engine only renders text. The palette itself
+*is* a template — `dots/telegram/colors.tdesktop-theme`, ~250 colours in
+noctalia's `{{colors.*}}` tokens — and the script renders it with
+`noctalia theme -c`, resizes the wallpaper to 1920px and zips the two together.
+
+Two themes are written, from the same palette, differing in one colour:
+
+| file | |
+|---|---|
+| `~/.config/telegram-desktop/themes/noctalia.tdesktop-theme` | with the hairline separators between the panels |
+| `~/.config/telegram-desktop/themes/noctalia-flat.tdesktop-theme` | `shadowFg`/`titleShadow` transparent — no separators |
+
+**Telegram has no way to reload a theme from outside.** There is no IPC and no
+CLI; the file is re-read only at startup, and it has to be opened from inside
+Telegram once to take effect at all:
+
+> Settings → Chat Settings → Themes → ⋯ → Open theme file
+
+After that the hook keeps the file current and the colours land on the next
+launch. `noctalia-telegram-theme --restart` rebuilds and restarts Telegram to
+apply them now; the hook deliberately does *not* restart anything, because the
+wallpaper rotates on a random reel and killing Telegram mid-message is worse
+than colours one launch behind.
+
+The palette is rendered from the **light** variant regardless of the shell's
+theme mode (`NOCTALIA_TG_MODE=dark`, or `=auto` to follow it). Material You's
+dark surfaces are nearly neutral grey — the wallpaper's tint is invisible in
+them, and every wallpaper produces the same dark-grey panels. The light ramp
+carries the hue. Note it is `--default-mode` that selects the variant for
+template rendering, *not* `--dark`/`--light`, which only affect JSON output.
+
+All the chrome — folder strip, chat list, top bar, composer, boxes, menus —
+is pinned to `surface_container` so the panels read as one surface. `sideBar*`
+has to be spelled out; leave it unset and Telegram falls back to its own
+defaults, which is a black strip down the left edge of an otherwise light
+window.
+
+**Palette names are version-specific and a wrong one rejects the whole file.**
+tdesktop embeds its default palette in the binary, so the names can be checked
+against the installed build rather than guessed:
+
+```fish
+python3 -c "print(b'outlineButtonBg' in open('/usr/bin/Telegram','rb').read())"
+```
+
+`outlineButton*`, `dialogsForward*` and `msgFileOutBgOver` were dropped for
+exactly this reason — they existed in older tdesktop and no longer do.
+
+Noctalia's community catalog does ship a `telegram` template. It writes a bare
+palette to `~/.config/telegram-desktop/themes/`, with no wallpaper in it, and
+it is not used here.
+
 ## Greeter
 
 `--greeter regreet` (the default) runs regreet inside `cage`. **`cage` exits if
@@ -229,7 +295,8 @@ copied, not symlinked — both apps rewrite their own files. `cp -n`, so a
 re-install never overwrites settings you changed since.
 
 noctalia keeps its state in `~/.local/state/noctalia/`, not
-`~/.config/noctalia/`, which stays empty unless you add overrides.
+`~/.config/noctalia/`, which holds nothing but the `telegram` symlink (the
+palette template — see above) unless you add overrides of your own.
 
 The seeded settings name a wallpaper by absolute path. With `--skip-wallpapers`
 that file was never copied, so the installer checks and falls back to
