@@ -223,7 +223,11 @@ PKGS=(
     # theme); it talks to both wallpaper APIs with stdlib urllib.
     python-gobject gtk4 librsvg
     # apps
-    telegram-desktop nautilus
+    # Dolphin is Qt/KDE and pulls ~30 KDE Frameworks packages with it. That is
+    # the cost of the file manager; nothing else here depends on them, and no
+    # KDE theming packages are installed (see 40-environment.kdl), so it renders
+    # with Qt's own default style.
+    telegram-desktop dolphin
     # clipboard / screenshot / media
     cliphist wl-clipboard grim slurp
     # night-light — bin/wlsunset-restart drives it, bin/lock-and-suspend calls that

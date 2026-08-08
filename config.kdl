@@ -33,7 +33,7 @@ hotkey-overlay {
 }
 
 // Honor activation tokens even with invalid serials — lets apps like VS Code,
-// Firefox, etc. steal focus when another app requests it (e.g. Nautilus open-with).
+// Firefox, etc. steal focus when another app requests it (e.g. Dolphin open-with).
 debug {
     honor-xdg-activation-with-invalid-serial
 }

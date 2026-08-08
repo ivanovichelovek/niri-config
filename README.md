@@ -55,7 +55,7 @@ niri validate            # should print "config is valid"
 ```
 
 Requires: `niri`, `noctalia`, `kitty`, `fish`, `zen-browser`, `google-chrome`,
-`telegram-desktop`, `yandex-music`, `happ-desktop-bin`, `nautilus`, `cliphist`,
+`telegram-desktop`, `yandex-music`, `happ-desktop-bin`, `dolphin`, `cliphist`,
 `wl-clipboard`, and a polkit agent — `bootstrap.sh` installs all of them.
 
 All helper scripts live in `bin/` and are symlinked into `~/.local/bin`:
