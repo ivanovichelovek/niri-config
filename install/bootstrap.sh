@@ -254,7 +254,10 @@ if step_ask "Official packages (${#PKGS[@]} from the repos)"; then
     # amd-ucode only takes effect once it is referenced from the boot entry.
     if command -v grub-mkconfig >/dev/null && [[ -d /boot/grub ]]; then
         step "Regenerating GRUB config (picks up amd-ucode)"
-        grub-mkconfig -o /boot/grub/grub.cfg
+        if ! grub-mkconfig -o /boot/grub/grub.cfg; then
+            warn "grub-mkconfig failed — the boot config was left as it was"
+            TODO+=("regenerate the boot config: grub-mkconfig -o /boot/grub/grub.cfg")
+        fi
     else
         warn "GRUB not found — microcode will not load until your bootloader references it"
         TODO+=("add the amd-ucode initrd to your boot entry")
@@ -284,27 +287,46 @@ else
     step "AUR helper (yay)"
     # NOTE: `command` is a shell builtin, so `sudo -u user command -v yay` always
     # fails. Check as root instead — /usr/bin is on root's PATH too.
+    HAVE_YAY=0
     if command -v yay >/dev/null 2>&1; then
         info "yay already present"
+        HAVE_YAY=1
     else
+        # Every step here reaches the network, and none of it is worth aborting
+        # the whole install over: aur.archlinux.org and the sources makepkg
+        # fetches go down far more often than the Arch mirrors do, and this runs
+        # right after the package step has already succeeded. Failing here used
+        # to kill the run at the worst possible point — most of the work done,
+        # no summary, no TODO list.
         BUILD_DIR=$(as_user mktemp -d)
-        as_user git clone --depth 1 https://aur.archlinux.org/yay-bin.git "$BUILD_DIR/yay-bin"
+        if ! as_user git clone --depth 1 https://aur.archlinux.org/yay-bin.git "$BUILD_DIR/yay-bin"; then
+            warn "could not clone yay-bin from the AUR"
         # Build as the user (makepkg refuses to run as root), then install as
         # root ourselves. Using `makepkg -si` would make makepkg call `sudo
         # pacman` from inside a sudo session, which can block on a password
         # prompt if the timestamp expires during a long build.
-        ( cd "$BUILD_DIR/yay-bin" && as_user makepkg -s --noconfirm )
-        pacman -U --noconfirm "$BUILD_DIR"/yay-bin/yay-bin-*.pkg.tar.*
+        elif ! ( cd "$BUILD_DIR/yay-bin" && as_user makepkg -s --noconfirm ); then
+            warn "yay-bin failed to build"
+        elif ! pacman -U --noconfirm "$BUILD_DIR"/yay-bin/yay-bin-*.pkg.tar.*; then
+            warn "could not install the yay-bin package"
+        else
+            HAVE_YAY=1
+        fi
         rm -rf "$BUILD_DIR"
     fi
 
-    step "AUR packages"
-    info "${AUR_PKGS[*]}"
-    # --sudoloop keeps the sudo timestamp alive across long builds.
-    as_user yay -S --needed --noconfirm --sudoloop "${AUR_PKGS[@]}" || {
-        warn "one or more AUR packages failed to build"
-        TODO+=("re-run: yay -S ${AUR_PKGS[*]}")
-    }
+    if (( ! HAVE_YAY )); then
+        warn "no AUR helper — noctalia, zen, chrome, yandex-music and happ NOT installed"
+        TODO+=("install yay, then: yay -S ${AUR_PKGS[*]}")
+    else
+        step "AUR packages"
+        info "${AUR_PKGS[*]}"
+        # --sudoloop keeps the sudo timestamp alive across long builds.
+        as_user yay -S --needed --noconfirm --sudoloop "${AUR_PKGS[@]}" || {
+            warn "one or more AUR packages failed to build"
+            TODO+=("re-run: yay -S ${AUR_PKGS[*]}")
+        }
+    fi
 fi
 
 # ─── shell ──────────────────────────────────────────────────────────────────
@@ -314,9 +336,19 @@ if [[ $CURRENT_SHELL == /usr/bin/fish ]]; then
     info "already fish"
     DID_CHANGE_SHELL=1
 elif step_ask "Login shell ($CURRENT_SHELL -> fish)"; then
-    chsh -s /usr/bin/fish "$USER_NAME"
-    DID_CHANGE_SHELL=1
-    info "$CURRENT_SHELL -> /usr/bin/fish"
+    # chsh fails if fish is not installed, which is exactly what happens after a
+    # partial package step — and an unguarded failure here would abort the run
+    # one step after it promised to carry on.
+    if [[ ! -x /usr/bin/fish ]]; then
+        warn "/usr/bin/fish not installed — leaving the shell as $CURRENT_SHELL"
+        TODO+=("install fish, then: chsh -s /usr/bin/fish $USER_NAME")
+    elif chsh -s /usr/bin/fish "$USER_NAME"; then
+        DID_CHANGE_SHELL=1
+        info "$CURRENT_SHELL -> /usr/bin/fish"
+    else
+        warn "chsh failed — shell left as $CURRENT_SHELL"
+        TODO+=("chsh -s /usr/bin/fish $USER_NAME")
+    fi
 else
     info "left as $CURRENT_SHELL"
     TODO+=("dots/fish is installed but unused until: chsh -s /usr/bin/fish $USER_NAME")
@@ -605,11 +637,18 @@ else
     regreet)
         # greetd itself is a tiny daemon (~1-2 MB resident); the greeter process
         # only lives until you log in. cage is the one-window compositor it runs in.
-        pacman -S --needed --noconfirm greetd greetd-regreet cage
+        # Guarded like every other network-facing command here: this is the last
+        # step of the install, and a failure to fetch a greeter is no reason to
+        # swallow the summary and the TODO list.
+        if ! pacman -S --needed --noconfirm greetd greetd-regreet cage; then
+            warn "could not install greetd/regreet/cage"
+            TODO+=("install the greeter: pacman -S greetd greetd-regreet cage")
+        fi
         # cage exits without this; see the PKGS comment above.
         if [[ ! -x /usr/bin/Xwayland ]]; then
             warn "/usr/bin/Xwayland missing — cage will crash-loop"
-            pacman -S --needed --noconfirm xorg-xwayland
+            pacman -S --needed --noconfirm xorg-xwayland || \
+                TODO+=("install xorg-xwayland, or the greeter will crash-loop")
         fi
 
         install -d -m 0755 /etc/greetd
@@ -647,7 +686,10 @@ EOF
         fi
         ;;
     tuigreet)
-        pacman -S --needed --noconfirm greetd greetd-tuigreet
+        if ! pacman -S --needed --noconfirm greetd greetd-tuigreet; then
+            warn "could not install greetd/tuigreet"
+            TODO+=("install the greeter: pacman -S greetd greetd-tuigreet")
+        fi
         install -d -m 0755 /etc/greetd
         cat >/etc/greetd/config.toml <<'EOF'
 [terminal]
@@ -660,7 +702,10 @@ EOF
         warn "tuigreet is text-only — no wallpaper"
         ;;
     noctalia)
-        pacman -S --needed --noconfirm greetd
+        if ! pacman -S --needed --noconfirm greetd; then
+            warn "could not install greetd"
+            TODO+=("install the greeter: pacman -S greetd")
+        fi
         as_user yay -S --needed --noconfirm --sudoloop noctalia-greeter || {
             warn "noctalia-greeter failed to build"
             TODO+=("install a greeter manually, or re-run with --greeter regreet")
