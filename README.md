@@ -469,6 +469,15 @@ owns every shortcut and forwards it over IPC. Bind keys here; run
 
 Volume, brightness and media keys route through `noctalia msg` for OSD feedback.
 
+Every one of these carries a `hotkey-overlay-title`, so `Mod+/` names the action
+instead of listing a dozen identical "Spawn noctalia" rows. Two consequences
+worth knowing when editing them: the `XF86*` hardware keys are set to
+`hotkey-overlay-title=null` and stay out of the list — they are labelled on the
+keyboard itself — and niri **collapses rows that share a title**, so the
+duplicate media binds (`Mod+Shift+P`/`N`/`B`, same actions as `Ctrl+Mod+Space`
+and `Mod+Alt+N`/`P`) are hidden explicitly rather than silently swallowing the
+rows above them.
+
 ## Dropped — no Noctalia equivalent
 
 Left commented in place in `70-binds.kdl`:

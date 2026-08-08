@@ -42,31 +42,31 @@ binds {
     // Noctalia's `window-switcher` takes only [close] — there is no "previous"
     // direction, so Alt+Shift+Tab has no equivalent. Niri's own focus binds
     // (Mod+H/J/K/L, Mod+arrows) cover reverse navigation.
-    Alt+Tab { spawn "noctalia" "msg" "window-switcher"; }
+    Alt+Tab hotkey-overlay-title="Window Switcher" { spawn "noctalia" "msg" "window-switcher"; }
     // Alt+Shift+Tab — no counterpart in noctalia msg.
 
     // App launcher.
-    Mod+Space repeat=false { spawn "noctalia" "msg" "panel-toggle" "launcher"; }
+    Mod+Space repeat=false hotkey-overlay-title="App Launcher" { spawn "noctalia" "msg" "panel-toggle" "launcher"; }
 
     // Clipboard history panel (reads Noctalia's own store, not cliphist).
-    Mod+V { spawn "noctalia" "msg" "panel-toggle" "clipboard"; }
+    Mod+V hotkey-overlay-title="Clipboard History" { spawn "noctalia" "msg" "panel-toggle" "clipboard"; }
 
     // Control center (network, bluetooth, audio, power profile…).
     // New — iNiR had no single equivalent. Drop it if the key is wanted elsewhere.
-    Mod+Shift+C { spawn "noctalia" "msg" "panel-toggle" "control-center"; }
+    Mod+Shift+C hotkey-overlay-title="Control Center: network, bluetooth, audio, power" { spawn "noctalia" "msg" "panel-toggle" "control-center"; }
 
     // Lock screen.
-    Mod+Alt+L allow-when-locked=true { spawn "noctalia" "msg" "session" "lock"; }
+    Mod+Alt+L allow-when-locked=true hotkey-overlay-title="Lock the Screen" { spawn "noctalia" "msg" "session" "lock"; }
 
     // Lock, then suspend (wrapper script also restarts wlsunset on resume).
-    Mod+Alt+Shift+L allow-when-locked=true { spawn "/home/ivanc/.local/bin/lock-and-suspend"; }
+    Mod+Alt+Shift+L allow-when-locked=true hotkey-overlay-title="Lock, then Suspend" { spawn "/home/ivanc/.local/bin/lock-and-suspend"; }
 
     // Region screenshot.
-    Mod+Shift+S { spawn "noctalia" "msg" "screenshot-region"; }
+    Mod+Shift+S hotkey-overlay-title="Screenshot: Select a Region" { spawn "noctalia" "msg" "screenshot-region"; }
 
     // Fullscreen screenshot of the focused monitor.
     // New — closest thing to iNiR's region tool family.
-    Mod+Ctrl+S { spawn "noctalia" "msg" "screenshot-fullscreen"; }
+    Mod+Ctrl+S hotkey-overlay-title="Screenshot: Whole Monitor" { spawn "noctalia" "msg" "screenshot-fullscreen"; }
 
     // No noctalia counterpart — these were iNiR region-tool modes:
     //   Mod+Shift+X  OCR on a selected region
@@ -76,13 +76,13 @@ binds {
     //                (bind wf-recorder or a script here if you want it back)
 
     // Wallpaper picker.
-    Ctrl+Alt+T { spawn "noctalia" "msg" "panel-toggle" "wallpaper"; }
+    Ctrl+Alt+T hotkey-overlay-title="Wallpaper Picker" { spawn "noctalia" "msg" "panel-toggle" "wallpaper"; }
 
     // Shell settings window.
-    Mod+Comma { spawn "noctalia" "msg" "settings-toggle"; }
+    Mod+Comma hotkey-overlay-title="Shell Settings" { spawn "noctalia" "msg" "settings-toggle"; }
 
     // Session / power dialog.
-    Mod+Shift+Q { spawn "noctalia" "msg" "panel-toggle" "session"; }
+    Mod+Shift+Q hotkey-overlay-title="Session: log out, reboot, power off" { spawn "noctalia" "msg" "panel-toggle" "session"; }
 
     // No noctalia counterpart — iNiR-specific:
     //   Super+G      crosshair overlay toggle
@@ -95,10 +95,10 @@ binds {
     // apps.terminal ("kitty -1") and apps.browser ("zen-browser") from iNiR's
     // config.json. Noctalia has no such indirection — spawn them directly.
 
-    Mod+T { spawn "kitty" "-1"; }
-    Mod+Return { spawn "kitty" "-1"; }
-    Super+E { spawn "nautilus"; }
-    Super+W { spawn "zen-browser"; }
+    Mod+T hotkey-overlay-title="Open a Terminal: kitty" { spawn "kitty" "-1"; }
+    Mod+Return hotkey-overlay-title="Open a Terminal: kitty" { spawn "kitty" "-1"; }
+    Super+E hotkey-overlay-title="Open the File Manager: nautilus" { spawn "nautilus"; }
+    Super+W hotkey-overlay-title="Open the Browser: Zen" { spawn "zen-browser"; }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Window management
@@ -289,27 +289,31 @@ binds {
 
     // Volume. Routed through the shell so the OSD appears and the right sink
     // is resolved; `noctalia msg volume-up/down [step]` takes an optional step.
-    XF86AudioRaiseVolume allow-when-locked=true { spawn "noctalia" "msg" "volume-up"; }
-    XF86AudioLowerVolume allow-when-locked=true { spawn "noctalia" "msg" "volume-down"; }
-    XF86AudioMute        allow-when-locked=true { spawn "noctalia" "msg" "volume-mute"; }
-    XF86AudioMicMute     allow-when-locked=true { spawn "noctalia" "msg" "mic-mute"; }
+    XF86AudioRaiseVolume allow-when-locked=true hotkey-overlay-title=null { spawn "noctalia" "msg" "volume-up"; }
+    XF86AudioLowerVolume allow-when-locked=true hotkey-overlay-title=null { spawn "noctalia" "msg" "volume-down"; }
+    XF86AudioMute        allow-when-locked=true hotkey-overlay-title=null { spawn "noctalia" "msg" "volume-mute"; }
+    XF86AudioMicMute     allow-when-locked=true hotkey-overlay-title=null { spawn "noctalia" "msg" "mic-mute"; }
 
     // Brightness.
-    XF86MonBrightnessUp   allow-when-locked=true { spawn "noctalia" "msg" "brightness-up"; }
-    XF86MonBrightnessDown allow-when-locked=true { spawn "noctalia" "msg" "brightness-down"; }
+    XF86MonBrightnessUp   allow-when-locked=true hotkey-overlay-title=null { spawn "noctalia" "msg" "brightness-up"; }
+    XF86MonBrightnessDown allow-when-locked=true hotkey-overlay-title=null { spawn "noctalia" "msg" "brightness-down"; }
 
     // Media playback (MPRIS — works with any player: Spotify, Firefox, mpv…).
-    XF86AudioPlay  { spawn "noctalia" "msg" "media" "toggle"; }
-    XF86AudioPause { spawn "noctalia" "msg" "media" "toggle"; }
-    XF86AudioNext  { spawn "noctalia" "msg" "media" "next"; }
-    XF86AudioPrev  { spawn "noctalia" "msg" "media" "previous"; }
+    XF86AudioPlay  hotkey-overlay-title=null { spawn "noctalia" "msg" "media" "toggle"; }
+    XF86AudioPause hotkey-overlay-title=null { spawn "noctalia" "msg" "media" "toggle"; }
+    XF86AudioNext  hotkey-overlay-title=null { spawn "noctalia" "msg" "media" "next"; }
+    XF86AudioPrev  hotkey-overlay-title=null { spawn "noctalia" "msg" "media" "previous"; }
 
     // Keyboard shortcuts for media (when no media keys are available).
-    Ctrl+Mod+Space { spawn "noctalia" "msg" "media" "toggle"; }
-    Mod+Alt+N      { spawn "noctalia" "msg" "media" "next"; }
-    Mod+Alt+P      { spawn "noctalia" "msg" "media" "previous"; }
-    Mod+Shift+M    { spawn "noctalia" "msg" "volume-mute"; }
-    Mod+Shift+P    { spawn "noctalia" "msg" "media" "toggle"; }
-    Mod+Shift+N    { spawn "noctalia" "msg" "media" "next"; }
-    Mod+Shift+B    { spawn "noctalia" "msg" "media" "previous"; }
+    Ctrl+Mod+Space hotkey-overlay-title="Media: Play / Pause" { spawn "noctalia" "msg" "media" "toggle"; }
+    Mod+Alt+N hotkey-overlay-title="Media: Next Track" { spawn "noctalia" "msg" "media" "next"; }
+    Mod+Alt+P hotkey-overlay-title="Media: Previous Track" { spawn "noctalia" "msg" "media" "previous"; }
+    Mod+Shift+M hotkey-overlay-title="Mute Audio" { spawn "noctalia" "msg" "volume-mute"; }
+    // Second set for the same three actions, kept because the muscle memory is
+    // there. Hidden from Mod+/ deliberately: niri collapses rows sharing a
+    // hotkey-overlay-title, so listing them would drop the rows above instead.
+    // Give them distinct titles to show both.
+    Mod+Shift+P hotkey-overlay-title=null { spawn "noctalia" "msg" "media" "toggle"; }
+    Mod+Shift+N hotkey-overlay-title=null { spawn "noctalia" "msg" "media" "next"; }
+    Mod+Shift+B hotkey-overlay-title=null { spawn "noctalia" "msg" "media" "previous"; }
 }
