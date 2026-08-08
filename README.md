@@ -16,7 +16,8 @@ sudo ./install/bootstrap.sh
 ```
 
 It asks who it is installing for first, offering the user who ran `sudo`;
-`--user <name>` answers that up front for an unattended run. The name matters
+`--user <name>` answers that up front for an unattended run. Every step after
+that asks for confirmation — see below. The name matters
 because the config carries absolute paths from the machine it was written on —
 `/home/ivanc/...` in binds, `dots/noctalia/settings.toml`, `dots/happ/routing.json`
 and the `.desktop` files — and they are rewritten to that user's home. This
@@ -67,9 +68,41 @@ earlier `niri-nvim-touchpad` daemon did the latter with an `EVIOCGRAB` and is
 gone: it needed a privileged ACL on the input device and killed the pad
 wholesale, including mouse focus switching.
 
-`--skip-wallpapers` leaves `~/Pictures/Wallpapers` alone; otherwise the 28
-images in `wallpapers/` are copied there. The copy uses `cp -n`, so re-running
-the script never overwrites anything you have added since.
+**Every step asks before it runs.** The first question is "answer yes to every
+step from here on?" — say yes once and the rest is unattended. Answering no to a
+single step skips it and carries on, and the script says what that costs (no
+NetworkManager means no network after a reboot; no packages means the steps after
+it have nothing to work with). `--yes` presets the yes-for-all answer for scripted
+runs, and a run with no tty never prompts at all rather than hanging on `read`.
+
+A `--skip-*` flag still wins over its prompt: that step is not even offered.
+
+### Wallpapers
+
+The 29 images (195 MB) are **not in `main`** — they live on the orphan branch
+`wallpapers`, which holds nothing else and shares no history with the config. A
+clone of the config no longer drags them along.
+
+The wallpapers step fetches them on demand:
+
+```fish
+git fetch --depth 1 origin wallpapers
+git archive FETCH_HEAD | tar -x        # extracts wallpapers/
+```
+
+`bootstrap.sh` does that into a temp directory and then copies with `cp -n`, so
+re-running never overwrites an image you added since. If `wallpapers/` already
+exists in the working tree it is used as-is and nothing is fetched. Declining
+the step, `--skip-wallpapers`, or no network are all handled the same way:
+noctalia's settings are pointed at the wallpaper it ships, so the shell still
+starts on something.
+
+`bin/random-wallpaper` is **independent of all this** — it is installed with the
+other helper scripts and downloads its own images. Skipping the wallpaper set
+costs you the seed collection, not the app.
+
+Splitting them out does not shrink an existing clone: the blobs stay reachable
+through `main`'s history, and only a history rewrite would remove them.
 
 ## Layout
 

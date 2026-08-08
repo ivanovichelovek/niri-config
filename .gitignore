@@ -5,5 +5,10 @@ dots/fish/conf.d/secrets.fish
 
 __pycache__/
 
+# The image set lives on the `wallpapers` orphan branch, not here — 195 MB has
+# no business in a config repo. install/bootstrap.sh fetches it on demand.
+# Ignored so a local working copy of them does not show up as untracked.
+/wallpapers/
+
 # Happ subscription database — server credentials, never commit it.
 dots/happ/subs.db
