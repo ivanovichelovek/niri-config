@@ -16,11 +16,19 @@ environment {
     // Let Electron apps (Chrome, VS Code, Discord) pick Wayland automatically.
     ELECTRON_OZONE_PLATFORM_HINT "auto"
 
-    // Dropped along with the themes, which are not carried over: XDG_MENU_PREFIX
-    // (Plasma menu prefix, needs kbuildsycoca6 from kservice),
-    // QT_QPA_PLATFORMTHEME "kde" (needs plasma-integration + kdeglobals) and
-    // QT_STYLE_OVERRIDE "Darkly" (needs the darkly package). Qt apps fall back
-    // to their own default styling. Put them back if you install a Qt theme.
+    // Qt theming, back now that Dolphin is the file manager and the packages
+    // behind these are installed again (plasma-integration, darkly-bin — see
+    // install/bootstrap.sh). Without them a Qt app ignores both and falls back
+    // to its own default styling, so the pair is only as good as the packages.
+    //
+    // "kde" rather than "qt6ct": it is what iNiR settled on, and it lets Dolphin
+    // read the colour scheme noctalia generates. It also needs kde-cli-tools —
+    // without that, Dolphin's "Open With" dialog does not open at all.
+    QT_QPA_PLATFORMTHEME "kde"
+    QT_STYLE_OVERRIDE "Darkly"
+
+    // Still dropped: XDG_MENU_PREFIX (Plasma menu prefix, needs kbuildsycoca6
+    // from kservice — nothing here builds a Plasma menu).
     //
     // Dropped when moving off iNiR — these were Quickshell/illogical-impulse only:
     //   QT_LOGGING_RULES "quickshell.dbus.properties=false"

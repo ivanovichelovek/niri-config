@@ -364,9 +364,12 @@ For that check to work, wallpapers are copied before the app configs.
 copied rather than symlinked — Dolphin rewrites `dolphinrc` on every view and
 window change. Notable: `SingleClick=true` (one click opens), no menu bar
 (`Ctrl+M` restores it). The thumbnailer list names packages that are not
-installed; Dolphin ignores the ones it cannot find. iNiR's `kdeglobals`,
-`darklyrc` and `Kvantum/` are deliberately not carried over — see
-`dots/dolphin/README.md`.
+installed; Dolphin ignores the ones it cannot find. `darklyrc` and `Kvantum/` come from iNiR as well and
+are live now: `40-environment.kdl` sets `QT_QPA_PLATFORMTHEME "kde"` and
+`QT_STYLE_OVERRIDE "Darkly"` again, backed by `plasma-integration`,
+`kde-cli-tools`, `kvantum` and AUR `darkly-bin`. iNiR's static `kdeglobals` is
+still not carried over — noctalia's `kcolorscheme` template does that job and
+follows the wallpaper. See `dots/dolphin/README.md`.
 
 **Happ's `subs.db` is gitignored.** It is a 4 MB SQLite database of server
 subscriptions — credentials — and does not belong in a repo. Re-add the
@@ -375,10 +378,9 @@ socks on 10808) and `routing.json` carry no secrets; the only URLs in them are
 public DNS and GitHub.
 
 Nothing else is carried over. Deliberately dropped: `btop`, `cava`, `micro`,
-`easyeffects`, all GTK/Qt theming (`kdeglobals`, `darklyrc`, `Kvantum`,
-`gtk-3.0`, `gtk-4.0`), and `~/.local/share/todoist-remind` with its four
+`easyeffects`, all GTK/Qt theming (`gtk-3.0`, `gtk-4.0`), and `~/.local/share/todoist-remind` with its four
 systemd units. `40-environment.kdl` therefore no longer sets
-`QT_QPA_PLATFORMTHEME`, `QT_STYLE_OVERRIDE` or `XDG_MENU_PREFIX`, and
+`XDG_MENU_PREFIX`, and
 `50-startup.kdl` no longer runs `kbuildsycoca6` — all of those need packages
 that are not installed.
 

@@ -223,11 +223,15 @@ PKGS=(
     # theme); it talks to both wallpaper APIs with stdlib urllib.
     python-gobject gtk4 librsvg
     # apps
-    # Dolphin is Qt/KDE and pulls ~30 KDE Frameworks packages with it. That is
-    # the cost of the file manager; nothing else here depends on them, and no
-    # KDE theming packages are installed (see 40-environment.kdl), so it renders
-    # with Qt's own default style.
+    # Dolphin is Qt/KDE and pulls ~30 KDE Frameworks packages with it.
     telegram-desktop dolphin
+    # Qt theming, so Dolphin does not sit in the session looking like a stray
+    # Qt app. QT_QPA_PLATFORMTHEME "kde" in 40-environment.kdl needs
+    # plasma-integration; kde-cli-tools is what makes Dolphin's "Open With"
+    # dialog work under that platform theme (iNiR learned this the hard way —
+    # see its CHANGELOG for #144). kvantum is the style engine iNiR ships a
+    # config for; the active style is Darkly, from the AUR, below.
+    plasma-integration kde-cli-tools kvantum
     # clipboard / screenshot / media
     cliphist wl-clipboard grim slurp
     # night-light — bin/wlsunset-restart drives it, bin/lock-and-suspend calls that
@@ -274,6 +278,7 @@ fi
 
 # ─── AUR ────────────────────────────────────────────────────────────────────
 AUR_PKGS=(
+    darkly-bin          # Qt style — QT_STYLE_OVERRIDE in 40-environment.kdl
     noctalia-git        # the shell (v5, native C++ — does NOT need quickshell)
     zen-browser-bin     # zen
     google-chrome
@@ -622,9 +627,10 @@ else
         done
         TODO+=("re-add your Happ subscriptions — subs.db is not in the repo")
 
-        # Dolphin. Copied for the same reason as the two above: Dolphin rewrites
-        # dolphinrc itself on every view or window change, so a symlink into the
-        # repo would make ordinary use edit tracked files. See dots/dolphin/.
+        # Dolphin and the Qt style. Copied for the same reason as the two above:
+        # Dolphin rewrites dolphinrc itself on every view or window change, so a
+        # symlink into the repo would make ordinary use edit tracked files.
+        # See dots/dolphin/README.md.
         for d in "$REPO_ROOT"/dots/dolphin/*rc; do
             [[ -f $d ]] || continue
             if [[ -f "$USER_HOME/.config/$(basename "$d")" ]]; then
@@ -634,6 +640,16 @@ else
                 info "$(basename "$d") copied"
             fi
         done
+        # Kvantum's own directory. Note the style actually in use is Darkly
+        # (QT_STYLE_OVERRIDE); this only matters if you switch to Kvantum.
+        if [[ -f "$USER_HOME/.config/Kvantum/kvantum.kvconfig" ]]; then
+            info "kvantum.kvconfig already present — left alone"
+        else
+            as_user mkdir -p "$USER_HOME/.config/Kvantum"
+            as_user cp "$REPO_ROOT/dots/dolphin/Kvantum/kvantum.kvconfig" \
+                       "$USER_HOME/.config/Kvantum/"
+            info "kvantum.kvconfig copied"
+        fi
     else
         warn "noctalia and Happ start unconfigured; noctalia picks its own wallpaper"
         TODO+=("seed the app configs by re-running this step")

@@ -372,8 +372,12 @@ noctalia держит своё состояние в `~/.local/state/noctalia/`,
 режима просмотра и размера окна. Из заметного: `SingleClick=true` (открытие
 одним щелчком) и отключённая строка меню (`Ctrl+M` возвращает). Список
 миниатюрщиков называет пакеты, которых здесь нет, — отсутствующие Dolphin просто
-игнорирует. `kdeglobals`, `darklyrc` и `Kvantum/` из iNiR намеренно не
-переносились, см. `dots/dolphin/README.md`.
+игнорирует. `darklyrc` и `Kvantum/` тоже взяты из iNiR и теперь
+работают: `40-environment.kdl` снова задаёт `QT_QPA_PLATFORMTHEME "kde"` и
+`QT_STYLE_OVERRIDE "Darkly"`, за которыми стоят пакеты `plasma-integration`,
+`kde-cli-tools`, `kvantum` и `darkly-bin` из AUR. Статичный `kdeglobals` из iNiR
+по-прежнему не переносится — эту роль играет шаблон `kcolorscheme` у noctalia,
+и он следует за обоями. См. `dots/dolphin/README.md`.
 
 **`subs.db` у Happ в `.gitignore`.** Это база SQLite на 4 МБ с подписками на
 серверы — учётные данные, — и ей не место в репозитории. Добавьте подписки заново
@@ -382,10 +386,9 @@ noctalia держит своё состояние в `~/.local/state/noctalia/`,
 GitHub.
 
 Больше ничего не переносится. Намеренно выброшены: `btop`, `cava`, `micro`,
-`easyeffects`, всё оформление GTK/Qt (`kdeglobals`, `darklyrc`, `Kvantum`,
-`gtk-3.0`, `gtk-4.0`) и `~/.local/share/todoist-remind` с четырьмя его
+`easyeffects`, оформление GTK (`gtk-3.0`, `gtk-4.0`) и `~/.local/share/todoist-remind` с четырьмя его
 systemd-юнитами. Поэтому `40-environment.kdl` больше не задаёт
-`QT_QPA_PLATFORMTHEME`, `QT_STYLE_OVERRIDE` и `XDG_MENU_PREFIX`, а
+`XDG_MENU_PREFIX`, а
 `50-startup.kdl` не запускает `kbuildsycoca6` — всё это требует пакетов, которых
 нет.
 

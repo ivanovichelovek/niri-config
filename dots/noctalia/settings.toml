@@ -61,7 +61,12 @@ wallpaper_scheme = "m3-tonal-spot"
     # side of that lives in the LVim repo (lua/plugins/base16.lua), which this
     # repo only clones, so it has to be committed there separately.
     [theme.templates]
-    builtin_ids = [ "kitty" ]
+    # "kcolorscheme" writes ~/.local/share/color-schemes/noctalia.colors and
+    # applies it, which is where Dolphin and every other KDE app take their
+    # colours from under QT_QPA_PLATFORMTHEME "kde". iNiR generated a static
+    # kdeglobals with matugen for this; here the palette follows the wallpaper
+    # like everything else, so that file is deliberately not carried over.
+    builtin_ids = [ "kitty", "kcolorscheme" ]
     community_ids = [ "neovim" ]
 
 [wallpaper.default]
