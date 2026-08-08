@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""Pin the focused window at full opacity, surviving focus changes.
+
+Why this exists instead of niri's own `toggle-window-rule-opacity`: that action
+does not survive a focus change when applied to the *focused* window. niri
+re-resolves window rules whenever `is-active` flips, and the per-window override
+is lost — which is exactly the moment it was supposed to matter. Verified on
+niri 26.04: toggling an already-unfocused window works and persists, toggling
+the focused window and then leaving it does nothing.
+
+So we take the long way round: write a real window-rule into a generated file
+that niri includes, and let the normal rule machinery do the work. Rules cannot
+address a window by id, so a pin matches app-id + exact title. Consequence
+worth knowing: if the window later changes its title (terminals do this per
+directory, browsers per tab) the rule stops matching and the pin quietly lapses.
+Re-pin it, or use --clear and start over.
+
+    niri-pin-window            toggle the pin on the focused window
+    niri-pin-window --list     show what is pinned
+    niri-pin-window --clear    drop every pin
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+
+STATE = os.path.expanduser("~/.local/state/niri/pinned-windows.json")
+RULES = os.path.expanduser("~/.config/niri/config.d/95-pinned.kdl")
+
+HEADER = """\
+// ─────────────────────────────────────────────────────────────────────────────
+// 95 — Pinned windows  (GENERATED — do not edit by hand)
+// ─────────────────────────────────────────────────────────────────────────────
+// Written by ~/.config/niri/bin/niri-pin-window, bound to Mod+O.
+// These rules sit after the global `is-active=false` dim in 30-window-rules.kdl,
+// so they win: a pinned window keeps full opacity even when unfocused.
+// ─────────────────────────────────────────────────────────────────────────────
+"""
+
+
+def niri(*args):
+    return subprocess.run(
+        ["niri", "msg", "-j", *args], capture_output=True, text=True, check=True
+    ).stdout
+
+
+def kdl_string(value):
+    """Emit `value` as a KDL string, preferring a raw literal for readability."""
+    return f'r#"{value}"#' if '"#' not in value else json.dumps(value)
+
+
+def load():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def save(pins):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    with open(STATE, "w") as f:
+        json.dump(pins, f, indent=2)
+
+    body = [HEADER]
+    for pin in pins:
+        app_id = kdl_string("^" + re.escape(pin["app_id"]) + "$")
+        title = kdl_string("^" + re.escape(pin["title"]) + "$")
+        body.append(
+            f"\n// {pin['app_id']} — {pin['title']}\n"
+            f"window-rule {{\n"
+            f"    match app-id={app_id} title={title}\n"
+            f"    opacity 1.0\n"
+            f"}}\n"
+        )
+    # niri watches its included files and reloads on write.
+    with open(RULES, "w") as f:
+        f.write("".join(body))
+
+
+def notify(message):
+    subprocess.run(
+        ["notify-send", "-a", "niri", "-t", "2000", "Pin window", message],
+        check=False,
+    )
+
+
+def main():
+    arg = sys.argv[1] if len(sys.argv) > 1 else None
+
+    if arg == "--clear":
+        save([])
+        notify("All pins cleared")
+        return
+
+    if arg == "--list":
+        pins = load()
+        print("\n".join(f"{p['app_id']}  —  {p['title']}" for p in pins) or "(no pins)")
+        return
+
+    window = json.loads(niri("focused-window"))
+    if not window:
+        notify("No focused window")
+        return
+    app_id, title = window.get("app_id") or "", window.get("title") or ""
+
+    pins = load()
+    match = next(
+        (p for p in pins if p["app_id"] == app_id and p["title"] == title), None
+    )
+    if match:
+        pins.remove(match)
+        save(pins)
+        notify(f"Unpinned: {title}")
+    else:
+        pins.append({"app_id": app_id, "title": title})
+        save(pins)
+        notify(f"Pinned at full opacity: {title}")
+
+
+if __name__ == "__main__":
+    main()

@@ -19,7 +19,22 @@ window-rule {
 // Dim unfocused windows slightly for visual hierarchy.
 window-rule {
     match is-active=false
-    opacity 0.9
+    opacity 0.8
+}
+
+// Floating windows are deliberate, short-lived overlays — keep them fully
+// opaque even when focus moves elsewhere. Must stay *below* the dim rule
+// above: rules apply top-to-bottom and the last match wins.
+window-rule {
+    match is-floating=true
+    opacity 1.0
+}
+
+// scrcpy (phone mirror) never dims, floating or tiled. Also independent of
+// keybinds — scrcpy grabs the keyboard to forward shortcuts to the phone.
+window-rule {
+    match app-id="scrcpy"
+    opacity 1.0
 }
 
 // ── Per-app fixes ───────────────────────────────────────────────────────────

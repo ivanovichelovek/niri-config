@@ -1,0 +1,7 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// 95 — Pinned windows  (GENERATED — do not edit by hand)
+// ─────────────────────────────────────────────────────────────────────────────
+// Written by ~/.config/niri/bin/niri-pin-window, bound to Mod+O.
+// These rules sit after the global `is-active=false` dim in 30-window-rules.kdl,
+// so they win: a pinned window keeps full opacity even when unfocused.
+// ─────────────────────────────────────────────────────────────────────────────

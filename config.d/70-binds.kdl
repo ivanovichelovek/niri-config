@@ -120,6 +120,23 @@ binds {
     // Toggle floating / tiling.
     Mod+A { toggle-window-floating; }
 
+    // Pin the focused window at full opacity: disables the `opacity` window
+    // rules for this window only (see 30-window-rules.kdl — unfocused windows
+    // are dimmed to 0.8 globally). Press again to hand it back to the rules.
+    // hotkey-overlay-title forces this into Mod+/ — that overlay otherwise
+    // lists only niri's own hardcoded "important" subset of actions.
+    // allow-inhibiting=false is essential here: apps that grab the keyboard
+    // (scrcpy forwards shortcuts to the phone, same for RDP/VNC clients) would
+    // otherwise swallow this bind — precisely on the windows worth pinning.
+    // niri's own toggle-window-rule-opacity is deliberately NOT used here: it
+    // does not survive a focus change when applied to the focused window, which
+    // is the only way a hotkey can ever apply it. The script writes a real
+    // window rule instead. allow-inhibiting=false so it still fires on windows
+    // that grab the keyboard (scrcpy forwards shortcuts to the phone).
+    Mod+O allow-inhibiting=false hotkey-overlay-title="Pin Window at Full Opacity" {
+        spawn "/home/ivanc/.config/niri/bin/niri-pin-window"
+    }
+
     // Switch focus between tiling and floating layers.
     Mod+Shift+V { switch-focus-between-floating-and-tiling; }
 
