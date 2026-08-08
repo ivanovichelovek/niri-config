@@ -113,6 +113,29 @@ wallpaper it ships, so the shell still starts on something.
 other helper scripts and downloads its own images. Skipping the wallpaper set
 costs you the seed collection, not the app.
 
+## Local overrides
+
+`config.d/99-local.kdl` is gitignored and included **last**. For binds and
+environment variables the last definition wins, so anything in it overrides the
+tracked config without editing tracked files — the way to keep one machine
+different without a permanently dirty working tree.
+
+```kdl
+binds {
+    Super+E hotkey-overlay-title="Open the File Manager: Dolphin" {
+        spawn "dolphin"
+    }
+}
+```
+
+`include` fails hard on a missing file, so an empty copy has to exist:
+`bootstrap.sh` creates it from `99-local.kdl.example`, and a manual clone should
+`cp config.d/99-local.kdl.example config.d/99-local.kdl` before running niri.
+
+The file manager the repo ships is **nautilus**, which is what iNiR uses too.
+Dolphin was tried and reverted; the machine this was written on keeps it through
+exactly the override above.
+
 ## Layout
 
 | file | status |
@@ -360,16 +383,12 @@ that file was never copied, so the installer checks and falls back to
 `/usr/share/noctalia/assets/noctalia-wallpaper.png`, which ships with the shell.
 For that check to work, wallpapers are copied before the app configs.
 
-`dots/dolphin/` holds `dolphinrc` and `kservicemenurc`, taken from iNiR and
-copied rather than symlinked — Dolphin rewrites `dolphinrc` on every view and
-window change. Notable: `SingleClick=true` (one click opens), no menu bar
-(`Ctrl+M` restores it). The thumbnailer list names packages that are not
-installed; Dolphin ignores the ones it cannot find. `darklyrc` and `Kvantum/` come from iNiR as well and
-are live now: `40-environment.kdl` sets `QT_QPA_PLATFORMTHEME "kde"` and
-`QT_STYLE_OVERRIDE "Darkly"` again, backed by `plasma-integration`,
-`kde-cli-tools`, `kvantum` and AUR `darkly-bin`. iNiR's static `kdeglobals` is
-still not carried over — noctalia's `kcolorscheme` template does that job and
-follows the wallpaper. See `dots/dolphin/README.md`.
+`dots/qt/` holds `darklyrc` and `Kvantum/`, taken from iNiR. They are live:
+`40-environment.kdl` sets `QT_QPA_PLATFORMTHEME "kde"` and `QT_STYLE_OVERRIDE
+"Darkly"`, backed by `plasma-integration`, `kde-cli-tools`, `kvantum` and AUR
+`darkly-bin`. iNiR's static `kdeglobals` is deliberately not carried over —
+noctalia's `kcolorscheme` template does that job and follows the wallpaper.
+See `dots/qt/README.md`.
 
 **Happ's `subs.db` is gitignored.** It is a 4 MB SQLite database of server
 subscriptions — credentials — and does not belong in a repo. Re-add the

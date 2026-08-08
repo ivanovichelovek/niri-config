@@ -1,0 +1,27 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// 99 — Local overrides  (per-machine, NOT tracked by git)
+// ─────────────────────────────────────────────────────────────────────────────
+// Copy this file to `99-local.kdl` next to it; that name is gitignored, so what
+// you put there stays on this machine and never shows up in `git status`.
+// install/bootstrap.sh does the copy for you.
+//
+// This file is included LAST, and for binds and environment variables the last
+// definition wins — so anything here overrides the rest of config.d/ without
+// editing tracked files. Verified on niri 26.04.
+//
+// `include` fails hard on a missing file, which is why the empty copy exists at
+// all rather than being created only when you want an override.
+//
+// Example — a different file manager on this machine only:
+//
+//   binds {
+//       Super+E hotkey-overlay-title="Open the File Manager: Dolphin" {
+//           spawn "dolphin"
+//       }
+//   }
+//
+//   environment {
+//       QT_QPA_PLATFORMTHEME "qt6ct"
+//   }
+//
+// ─────────────────────────────────────────────────────────────────────────────

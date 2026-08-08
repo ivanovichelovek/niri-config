@@ -12,3 +12,7 @@ __pycache__/
 
 # Happ subscription database — server credentials, never commit it.
 dots/happ/subs.db
+
+# Per-machine overrides — the whole point is that they stay local.
+# config.d/99-local.kdl.example is tracked; copy it to create yours.
+config.d/99-local.kdl

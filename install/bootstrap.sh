@@ -223,14 +223,12 @@ PKGS=(
     # theme); it talks to both wallpaper APIs with stdlib urllib.
     python-gobject gtk4 librsvg
     # apps
-    # Dolphin is Qt/KDE and pulls ~30 KDE Frameworks packages with it.
-    telegram-desktop dolphin
-    # Qt theming, so Dolphin does not sit in the session looking like a stray
-    # Qt app. QT_QPA_PLATFORMTHEME "kde" in 40-environment.kdl needs
-    # plasma-integration; kde-cli-tools is what makes Dolphin's "Open With"
-    # dialog work under that platform theme (iNiR learned this the hard way —
-    # see its CHANGELOG for #144). kvantum is the style engine iNiR ships a
-    # config for; the active style is Darkly, from the AUR, below.
+    telegram-desktop nautilus
+    # Qt theming, so Qt apps follow the session instead of falling back to their
+    # own default styling. QT_QPA_PLATFORMTHEME "kde" in 40-environment.kdl
+    # needs plasma-integration; kde-cli-tools backs the file dialogs and the
+    # "Open With" window under that platform theme. kvantum is the style engine
+    # iNiR ships a config for; the active style is Darkly, from the AUR, below.
     plasma-integration kde-cli-tools kvantum
     # clipboard / screenshot / media
     cliphist wl-clipboard grim slurp
@@ -475,6 +473,17 @@ else
             fi
         fi
 
+        # Per-machine overrides. config.kdl includes this unconditionally and a
+        # missing include is a hard parse error, so the empty copy has to exist
+        # before anything validates the config.
+        if [[ -f $REPO_ROOT/config.d/99-local.kdl ]]; then
+            info "99-local.kdl already present — left alone"
+        else
+            as_user cp "$REPO_ROOT/config.d/99-local.kdl.example" \
+                       "$REPO_ROOT/config.d/99-local.kdl"
+            info "99-local.kdl created from the example (gitignored)"
+        fi
+
         if command -v niri >/dev/null; then
             if as_user niri validate -c "$REPO_ROOT/config.kdl" >/dev/null 2>&1; then
                 info "niri validate: config is valid"
@@ -627,11 +636,9 @@ else
         done
         TODO+=("re-add your Happ subscriptions — subs.db is not in the repo")
 
-        # Dolphin and the Qt style. Copied for the same reason as the two above:
-        # Dolphin rewrites dolphinrc itself on every view or window change, so a
-        # symlink into the repo would make ordinary use edit tracked files.
-        # See dots/dolphin/README.md.
-        for d in "$REPO_ROOT"/dots/dolphin/*rc; do
+        # Qt theming. Copied for the same reason as the two above: the apps
+        # rewrite these files themselves. See dots/qt/README.md.
+        for d in "$REPO_ROOT"/dots/qt/*rc; do
             [[ -f $d ]] || continue
             if [[ -f "$USER_HOME/.config/$(basename "$d")" ]]; then
                 info "$(basename "$d") already present — left alone"
@@ -646,7 +653,7 @@ else
             info "kvantum.kvconfig already present — left alone"
         else
             as_user mkdir -p "$USER_HOME/.config/Kvantum"
-            as_user cp "$REPO_ROOT/dots/dolphin/Kvantum/kvantum.kvconfig" \
+            as_user cp "$REPO_ROOT/dots/qt/Kvantum/kvantum.kvconfig" \
                        "$USER_HOME/.config/Kvantum/"
             info "kvantum.kvconfig copied"
         fi
