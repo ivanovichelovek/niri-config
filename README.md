@@ -81,7 +81,7 @@ A `--skip-*` flag still wins over its prompt: that step is not even offered.
 
 ### Wallpapers
 
-The 9 images (60 MB) are in a **separate repository**,
+The 8 images (83 MB) are in a **separate repository**,
 [niri-wallpapers](https://github.com/ivanovichelovek/niri-wallpapers), and the
 wallpapers step clones it shallowly on demand:
 

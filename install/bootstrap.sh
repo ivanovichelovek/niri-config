@@ -301,7 +301,7 @@ fi
 
 # ─── wallpapers ─────────────────────────────────────────────────────────────
 # A step of its own, and deliberately not tied to anything else: the image set
-# is ~60 MB and lives in a separate repository, so a clone of the config does
+# is ~83 MB and lives in a separate repository, so a clone of the config does
 # not pay for it. bin/random-wallpaper is installed with the other helper
 # scripts and is independent of this step — it downloads its own images.
 #
@@ -311,7 +311,7 @@ fi
 if [[ $SKIP_WALLPAPERS == 1 ]]; then
     step "Wallpapers"
     info "skipped (--skip-wallpapers)"
-elif step_ask "Wallpapers (~60 MB from niri-wallpapers)"; then
+elif step_ask "Wallpapers (~83 MB from niri-wallpapers)"; then
     as_user mkdir -p "$USER_HOME/Pictures/Wallpapers"
     WALL_SRC=""
     if [[ -d $REPO_ROOT/wallpapers ]]; then
