@@ -25,8 +25,8 @@ ASSUME_YES=0        # 1: never ask, do every step (set by --yes or "yes for all"
 GREETER="regreet"   # regreet | noctalia | tuigreet | none
 USER_NAME=""        # empty: ask, defaulting to $SUDO_USER
 # The image set lives in its own repository, not in a branch here: `git clone`
-# fetches every branch, so a branch next to the config would still have cost
-# every clone 195 MB.
+# fetches every branch, so images on a branch next to the config would have
+# ridden along with every clone anyway.
 WALLPAPER_REPO="https://github.com/ivanovichelovek/niri-wallpapers.git"
 
 usage() {
@@ -301,7 +301,7 @@ fi
 
 # ─── wallpapers ─────────────────────────────────────────────────────────────
 # A step of its own, and deliberately not tied to anything else: the image set
-# is ~195 MB and lives in a separate repository, so a clone of the config does
+# is ~60 MB and lives in a separate repository, so a clone of the config does
 # not pay for it. bin/random-wallpaper is installed with the other helper
 # scripts and is independent of this step — it downloads its own images.
 #
@@ -311,7 +311,7 @@ fi
 if [[ $SKIP_WALLPAPERS == 1 ]]; then
     step "Wallpapers"
     info "skipped (--skip-wallpapers)"
-elif step_ask "Wallpapers (~195 MB from niri-wallpapers)"; then
+elif step_ask "Wallpapers (~60 MB from niri-wallpapers)"; then
     as_user mkdir -p "$USER_HOME/Pictures/Wallpapers"
     WALL_SRC=""
     if [[ -d $REPO_ROOT/wallpapers ]]; then
