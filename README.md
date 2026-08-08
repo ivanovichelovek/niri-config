@@ -1,5 +1,7 @@
 # niri-config
 
+*[Русская версия](README.ru.md)*
+
 Standalone [niri](https://github.com/YaLTeR/niri) configuration, extracted from
 an iNiR (Quickshell) setup and adapted for the [Noctalia](https://noctalia.dev)
 shell. No dependency on iNiR, illogical-impulse or Quickshell remains.
@@ -79,30 +81,29 @@ A `--skip-*` flag still wins over its prompt: that step is not even offered.
 
 ### Wallpapers
 
-The 29 images (195 MB) are **not in `main`** — they live on the orphan branch
-`wallpapers`, which holds nothing else and shares no history with the config. A
-clone of the config no longer drags them along.
-
-The wallpapers step fetches them on demand:
+The 29 images (195 MB) are in a **separate repository**,
+[niri-wallpapers](https://github.com/ivanovichelovek/niri-wallpapers), and the
+wallpapers step clones it shallowly on demand:
 
 ```fish
-git fetch --depth 1 origin wallpapers
-git archive FETCH_HEAD | tar -x        # extracts wallpapers/
+git clone --depth 1 https://github.com/ivanovichelovek/niri-wallpapers.git
 ```
 
-`bootstrap.sh` does that into a temp directory and then copies with `cp -n`, so
-re-running never overwrites an image you added since. If `wallpapers/` already
-exists in the working tree it is used as-is and nothing is fetched. Declining
-the step, `--skip-wallpapers`, or no network are all handled the same way:
-noctalia's settings are pointed at the wallpaper it ships, so the shell still
-starts on something.
+A branch in this repository would not have worked: **`git clone` fetches every
+branch**, so the images would have ridden along with any clone regardless of
+which branch they sat on. Only a separate repository keeps the config clone
+small. `main`'s history was rewritten to drop the blobs it used to carry.
+
+`bootstrap.sh` clones into a temp directory, drops the `.git` and `README.md`,
+copies with `cp -n` so a re-run never overwrites an image you added since, and
+throws the clone away. If `wallpapers/` already exists in the working tree it is
+used as-is and nothing is cloned. Declining the step, `--skip-wallpapers`, or no
+network are handled the same way: noctalia's settings are pointed at the
+wallpaper it ships, so the shell still starts on something.
 
 `bin/random-wallpaper` is **independent of all this** — it is installed with the
 other helper scripts and downloads its own images. Skipping the wallpaper set
 costs you the seed collection, not the app.
-
-Splitting them out does not shrink an existing clone: the blobs stay reachable
-through `main`'s history, and only a history rewrite would remove them.
 
 ## Layout
 

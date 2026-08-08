@@ -24,7 +24,10 @@ SKIP_WALLPAPERS=0
 ASSUME_YES=0        # 1: never ask, do every step (set by --yes or "yes for all")
 GREETER="regreet"   # regreet | noctalia | tuigreet | none
 USER_NAME=""        # empty: ask, defaulting to $SUDO_USER
-WALLPAPER_BRANCH="wallpapers"   # orphan branch holding the image set
+# The image set lives in its own repository, not in a branch here: `git clone`
+# fetches every branch, so a branch next to the config would still have cost
+# every clone 195 MB.
+WALLPAPER_REPO="https://github.com/ivanovichelovek/niri-wallpapers.git"
 
 usage() {
     sed -n '2,16p' "$0" | sed 's/^# \?//'
@@ -298,10 +301,9 @@ fi
 
 # ─── wallpapers ─────────────────────────────────────────────────────────────
 # A step of its own, and deliberately not tied to anything else: the image set
-# is ~195 MB and lives on the `$WALLPAPER_BRANCH` orphan branch rather than in
-# main, so a clone of the config does not pay for it. bin/random-wallpaper is
-# installed with the other helper scripts and is independent of this step — it
-# downloads its own images and needs none of these.
+# is ~195 MB and lives in a separate repository, so a clone of the config does
+# not pay for it. bin/random-wallpaper is installed with the other helper
+# scripts and is independent of this step — it downloads its own images.
 #
 # Runs before the config block because the noctalia settings seeded there name a
 # wallpaper by absolute path and fall back to noctalia's own if the file is
@@ -309,29 +311,27 @@ fi
 if [[ $SKIP_WALLPAPERS == 1 ]]; then
     step "Wallpapers"
     info "skipped (--skip-wallpapers)"
-elif step_ask "Wallpapers (~195 MB, branch '$WALLPAPER_BRANCH')"; then
+elif step_ask "Wallpapers (~195 MB from niri-wallpapers)"; then
     as_user mkdir -p "$USER_HOME/Pictures/Wallpapers"
     WALL_SRC=""
     if [[ -d $REPO_ROOT/wallpapers ]]; then
-        # Someone checked the branch out by hand, or this is the machine the
-        # repo was written on. Use what is there rather than going to network.
+        # Present already — the machine this repo was written on, or someone
+        # dropped the images in by hand. Use them rather than going to network.
         WALL_SRC="$REPO_ROOT/wallpapers"
         info "using the local wallpapers/ directory"
-    elif as_user git -C "$REPO_ROOT" fetch --depth 1 origin "$WALLPAPER_BRANCH"; then
-        # Extract to a temp dir first. `git archive | tar -x` overwrites, and the
-        # guarantee here is the same one cp -n gives below: an image you added
-        # yourself is never replaced by a re-run.
-        TMP_WALL=$(as_user mktemp -d)
-        if as_user git -C "$REPO_ROOT" archive FETCH_HEAD \
-             | as_user tar -x -C "$TMP_WALL" 2>/dev/null \
-             && [[ -d $TMP_WALL/wallpapers ]]; then
-            WALL_SRC="$TMP_WALL/wallpapers"
-        else
-            warn "branch '$WALLPAPER_BRANCH' has no wallpapers/ directory"
-        fi
     else
-        warn "could not fetch '$WALLPAPER_BRANCH' — no network, or it was never pushed"
-        TODO+=("wallpapers: git fetch origin $WALLPAPER_BRANCH && git archive FETCH_HEAD | tar -x")
+        TMP_WALL=$(as_user mktemp -d)
+        # https rather than ssh: this runs on machines with no key yet, same
+        # reason the LVim clone below uses it. --depth 1 because the history of
+        # an image set is worth nothing to an installer.
+        if as_user git clone --quiet --depth 1 "$WALLPAPER_REPO" "$TMP_WALL/repo"; then
+            # Strip the repository's own files so only images get copied.
+            as_user rm -rf "$TMP_WALL/repo/.git" "$TMP_WALL/repo/README.md"
+            WALL_SRC="$TMP_WALL/repo"
+        else
+            warn "could not clone $WALLPAPER_REPO — no network, or it is not public"
+            TODO+=("wallpapers: git clone --depth 1 $WALLPAPER_REPO, copy the images into ~/Pictures/Wallpapers")
+        fi
     fi
 
     if [[ -n $WALL_SRC ]]; then
