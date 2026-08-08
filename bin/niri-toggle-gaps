@@ -12,7 +12,11 @@ if grep -qE '^\s+gaps 0\b' "$LAYOUT"; then
     sed -i -E 's/^(\s+)gaps 0\b/\1gaps 25/' "$LAYOUT"
     sed -i -E 's/^(\s*)(\/\/\s*|\/-)always-center-single-column/\1always-center-single-column/' "$LAYOUT"
     sed -i -E 's/^(\s+)geometry-corner-radius 0\b/\1geometry-corner-radius 16/' "$RULES"
-    sed -i -E 's/^(\s+)opacity 1\.0\b/\1opacity 0.9/' "$RULES"
+    # Re-enable the dim rule. Toggling the whole node with KDL's `/-` prefix
+    # rather than rewriting the number: the file now holds several `opacity`
+    # lines (floating windows, scrcpy, see README "Window opacity") and a
+    # value-matching sed would rewrite those too.
+    sed -i -E '/^\/\/ Dim unfocused windows/{n; s|^/-window-rule \{|window-rule {|}' "$RULES"
     niri msg action load-config-file
     # Was: systemctl --user start inir  (restarted the whole iNiR shell)
     noctalia msg bar-show
@@ -21,7 +25,7 @@ else
     sed -i -E 's/^(\s+)gaps [0-9]+\b/\1gaps 0/' "$LAYOUT"
     sed -i -E 's/^(\s*)always-center-single-column/\1\/\/ always-center-single-column/' "$LAYOUT"
     sed -i -E 's/^(\s+)geometry-corner-radius [0-9]+\b/\1geometry-corner-radius 0/' "$RULES"
-    sed -i -E 's/^(\s+)opacity 0\.9\b/\1opacity 1.0/' "$RULES"
+    sed -i -E '/^\/\/ Dim unfocused windows/{n; s|^window-rule \{|/-window-rule {|}' "$RULES"
     # Was: systemctl --user stop inir  (killed the shell to hide its panel)
     noctalia msg bar-hide
     niri msg action load-config-file

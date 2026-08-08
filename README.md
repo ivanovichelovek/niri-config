@@ -56,9 +56,10 @@ Requires: `niri`, `noctalia`, `kitty`, `fish`, `zen-browser`, `google-chrome`,
 `wl-clipboard`, and a polkit agent — `bootstrap.sh` installs all of them.
 
 All helper scripts live in `bin/` and are symlinked into `~/.local/bin`:
-`lock-and-suspend`, `niri-toggle-gaps`, `random-wallpaper`,
+`lock-and-suspend`, `niri-pin-window`, `niri-toggle-gaps`, `random-wallpaper`,
 `noctalia-telegram-theme` and `wlsunset-restart` (called by
-`lock-and-suspend`).
+`lock-and-suspend`). `claude-state` lives there too but is run by hand — see
+[Moving to a new machine](#moving-to-a-new-machine).
 
 Stray touchpad clicks in nvim are handled in nvim itself (`mouse = ""` in
 `~/.config/nvim/lua/config/options.lua`), not by disabling the device. An
@@ -76,13 +77,14 @@ the script never overwrites anything you have added since.
 |---|---|
 | `10-input-and-cursor.kdl` | unchanged |
 | `20-layout-and-overview.kdl` | unchanged (comment wording only) |
-| `30-window-rules.kdl` | **unchanged** — per-app window rules |
+| `30-window-rules.kdl` | per-app window rules + unfocused dim (see [Window opacity](#window-opacity)) |
 | `40-environment.kdl` | iNiR venv + Quickshell logging vars dropped |
 | `50-startup.kdl` | starts `noctalia -d` instead of `inir.service` |
 | `60-animations.kdl` | unchanged (comment wording only) |
 | `70-binds.kdl` | 37 iNiR binds re-pointed at `noctalia msg` |
 | `80-layer-rules.kdl` | `quickshell:*Backdrop` → `noctalia-wallpaper` |
 | `90-user-extra.kdl` | named workspaces + per-app assignment + personal binds |
+| `95-pinned.kdl` | **generated** by `bin/niri-pin-window` — pinned windows, loaded last |
 
 The two files carrying the app automation — `30-window-rules.kdl` and
 `90-user-extra.kdl` — are compositor config and needed no conversion when
@@ -374,6 +376,72 @@ Every app-id above was read off the installed `.desktop` file except **Happ**,
 which ships none — that one was read off a running window with
 `niri msg windows`. Capital H, exactly `Happ`.
 
+## Window opacity
+
+Unfocused windows dim to `0.8` (`match is-active=false` in `30-window-rules.kdl`)
+so the focused one reads at a glance. Two categories are exempt, and both rules
+sit **below** the dim rule — window rules apply top-to-bottom and the last match
+wins:
+
+| rule | why |
+|---|---|
+| `is-floating=true` | floating windows are deliberate, short-lived overlays |
+| `app-id="scrcpy"` | the phone mirror exists to be watched *while* working elsewhere |
+
+Focus mode (`Mod+Shift+F`, `bin/niri-toggle-gaps`) suspends the dim while it is
+on. It disables the whole rule with KDL's `/-` node prefix rather than rewriting
+the number — the file holds several `opacity` lines now, and the value-matching
+`sed` it used before would have rewritten the exemptions above along with it.
+
+Separately, kitty is translucent on its own account (`background_opacity 0.85`,
+see [kitty](#kitty)). A terminal therefore shows the wallpaper through it even
+at full compositor opacity — that is kitty, not the dim, and niri cannot undo
+it. Only kitty's own setting can.
+
+### Pinning a window — `Mod+O`
+
+`bin/niri-pin-window` toggles a pin on the focused window: pinned windows keep
+full opacity when focus leaves. It writes a real `window-rule` into the
+generated `config.d/95-pinned.kdl`, which niri picks up on write.
+
+```fish
+niri-pin-window            # toggle the focused window (this is what Mod+O runs)
+niri-pin-window --list     # what is pinned
+niri-pin-window --clear    # drop every pin
+```
+
+Each press sends a notification, so the result is visible without hunting for a
+20% opacity difference.
+
+**Why a script and not niri's own `toggle-window-rule-opacity`.** That action
+does not survive a focus change when applied to the *focused* window: niri
+re-resolves window rules whenever `is-active` flips and the per-window override
+is lost — precisely when it was supposed to start mattering. Applied to an
+already-unfocused window (`--id`) it works and persists, but a hotkey has no
+other window to act on. Verified on niri 26.04 by screenshotting both paths.
+
+`is-urgent=true` looks like a usable marker for the same job and is not: niri
+clears urgency the moment the window is focused.
+
+**The bind sets `allow-inhibiting=false`**, without which it never fires on the
+windows most worth pinning. `allow-inhibiting` defaults to `true`, and any
+client holding the keyboard-shortcuts-inhibitor protocol swallows such binds —
+scrcpy does exactly that, to forward shortcuts to the phone. `Mod+Escape`
+(`toggle-keyboard-shortcuts-inhibit`) is the global escape hatch and carries the
+same property for the same reason.
+
+**Limitation:** window rules cannot address a window by id, so a pin matches
+`app-id` + **exact title**. If the window later retitles itself — terminals do
+per directory, browsers per tab — the rule stops matching and the pin lapses
+silently. Press `Mod+O` again, or `--clear` and start over.
+
+`95-pinned.kdl` is tracked but committed empty, so `include` resolves on a fresh
+clone before the script has ever run. Pins do show up in `git status` afterwards.
+
+`hotkey-overlay-title` on the bind is what puts it in the `Mod+/` cheatsheet:
+that overlay is titled "Important Hotkeys" and otherwise lists only niri's own
+hardcoded subset — `Mod+F`, `Mod+C` and the resize binds are missing from it too.
+
 ## Shell binds
 
 Noctalia cannot grab global keys — it is a layer-shell client, so the compositor
@@ -391,9 +459,13 @@ owns every shortcut and forwards it over IPC. Bind keys here; run
 | `Mod+Shift+S` | region screenshot |
 | `Mod+Ctrl+S` | fullscreen screenshot *(new)* |
 | `Mod+Alt+L` | lock |
+| `Mod+Alt+Shift+L` | lock, then suspend (`bin/lock-and-suspend`) |
 | `Mod+Slash` | niri hotkey cheatsheet *(was iNiR's own)* |
 | `Alt+Tab` | window switcher |
 | `Ctrl+Alt+W` | random wallpaper previewer *(new)* |
+| `Mod+Shift+F` | focus mode — no gaps, corners, dim or bar (`bin/niri-toggle-gaps`) |
+| `Mod+O` | pin the focused window at full opacity *(new)* |
+| `Mod+Escape` | re-enable binds an app has inhibited |
 
 Volume, brightness and media keys route through `noctalia msg` for OSD feedback.
 

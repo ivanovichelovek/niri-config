@@ -134,7 +134,7 @@ binds {
     // window rule instead. allow-inhibiting=false so it still fires on windows
     // that grab the keyboard (scrcpy forwards shortcuts to the phone).
     Mod+O allow-inhibiting=false hotkey-overlay-title="Pin Window at Full Opacity" {
-        spawn "/home/ivanc/.config/niri/bin/niri-pin-window"
+        spawn "/home/ivanc/.local/bin/niri-pin-window"
     }
 
     // Switch focus between tiling and floating layers.
