@@ -360,6 +360,14 @@ that file was never copied, so the installer checks and falls back to
 `/usr/share/noctalia/assets/noctalia-wallpaper.png`, which ships with the shell.
 For that check to work, wallpapers are copied before the app configs.
 
+`dots/dolphin/` holds `dolphinrc` and `kservicemenurc`, taken from iNiR and
+copied rather than symlinked — Dolphin rewrites `dolphinrc` on every view and
+window change. Notable: `SingleClick=true` (one click opens), no menu bar
+(`Ctrl+M` restores it). The thumbnailer list names packages that are not
+installed; Dolphin ignores the ones it cannot find. iNiR's `kdeglobals`,
+`darklyrc` and `Kvantum/` are deliberately not carried over — see
+`dots/dolphin/README.md`.
+
 **Happ's `subs.db` is gitignored.** It is a 4 MB SQLite database of server
 subscriptions — credentials — and does not belong in a repo. Re-add the
 subscriptions from the app after installing. `config.json` (sing-box: tun, DNS,

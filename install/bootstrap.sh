@@ -621,6 +621,19 @@ else
             fi
         done
         TODO+=("re-add your Happ subscriptions — subs.db is not in the repo")
+
+        # Dolphin. Copied for the same reason as the two above: Dolphin rewrites
+        # dolphinrc itself on every view or window change, so a symlink into the
+        # repo would make ordinary use edit tracked files. See dots/dolphin/.
+        for d in "$REPO_ROOT"/dots/dolphin/*rc; do
+            [[ -f $d ]] || continue
+            if [[ -f "$USER_HOME/.config/$(basename "$d")" ]]; then
+                info "$(basename "$d") already present — left alone"
+            else
+                as_user cp "$d" "$USER_HOME/.config/"
+                info "$(basename "$d") copied"
+            fi
+        done
     else
         warn "noctalia and Happ start unconfigured; noctalia picks its own wallpaper"
         TODO+=("seed the app configs by re-running this step")
