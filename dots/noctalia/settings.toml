@@ -65,10 +65,10 @@ wallpaper_scheme = "m3-tonal-spot"
     community_ids = [ "neovim" ]
 
 [wallpaper.default]
-path = "/home/ivanc/Pictures/Wallpapers/random_wallpaper-1.png"
+path = "/home/ivanc/Pictures/Wallpapers/konachan-398920.jpg"
 
 [wallpaper.last]
-path = "/home/ivanc/Pictures/Wallpapers/random_wallpaper-1.png"
+path = "/home/ivanc/Pictures/Wallpapers/konachan-398920.jpg"
 
 [wallpaper.monitors.eDP-1]
-path = "/home/ivanc/Pictures/Wallpapers/random_wallpaper-1.png"
+path = "/home/ivanc/Pictures/Wallpapers/konachan-398920.jpg"

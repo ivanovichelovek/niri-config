@@ -86,8 +86,10 @@ command -v pacman >/dev/null || { echo "pacman not found — this is not Arch" >
 # Asked here, before anything is installed, because the config carries absolute
 # paths from the machine it was written on (/home/ivanc/…) and they are
 # rewritten to this user's home further down.
+# --yes means unattended, so it has to cover this prompt too — otherwise the one
+# question asked before any step still blocks a scripted run that has a tty.
 if [[ -z $USER_NAME ]]; then
-    if [[ -t 0 ]]; then
+    if [[ -t 0 ]] && (( ! ASSUME_YES )); then
         read -rp "install for which user? [$SUDO_USER] " USER_NAME
     fi
     USER_NAME=${USER_NAME:-$SUDO_USER}
@@ -153,6 +155,13 @@ link_dot() {
 }
 
 TODO=()
+
+# What actually happened, for the summary at the end. Steps can be declined one
+# by one, so the summary has to report the result rather than restate the plan —
+# it used to claim the config was linked and the shell changed even when both
+# had been skipped.
+DID_LINK_CONFIG=0
+DID_CHANGE_SHELL=0
 
 echo "user:   $USER_NAME ($USER_HOME)"
 echo "config: $REPO_ROOT"
@@ -225,10 +234,22 @@ PKGS=(
     noto-fonts noto-fonts-emoji noto-fonts-cjk ttf-jetbrains-mono-nerd
     # misc
     git curl wget unzip man-db bluez bluez-utils
+    # Networking. The header calls this part of the assumed base system, and on
+    # an install done through the guided installer it is — but `pacstrap base`
+    # does not pull it in, and the Services step below then fails to enable a
+    # unit that was never installed.
+    networkmanager
 )
 
 if step_ask "Official packages (${#PKGS[@]} from the repos)"; then
-    pacman -Syu --needed --noconfirm "${PKGS[@]}"
+    # Not fatal on its own: a dead mirror or one dropped package name used to
+    # abort the whole script here with nothing but pacman's own error, no TODO
+    # and no summary. The steps below degrade honestly instead.
+    if ! pacman -Syu --needed --noconfirm "${PKGS[@]}"; then
+        warn "pacman failed — bad mirror, no network, or a renamed package"
+        warn "continuing; the steps below will work with whatever did install"
+        TODO+=("re-run the package install: pacman -Syu --needed ${PKGS[*]}")
+    fi
 
     # amd-ucode only takes effect once it is referenced from the boot entry.
     if command -v grub-mkconfig >/dev/null && [[ -d /boot/grub ]]; then
@@ -291,8 +312,10 @@ CURRENT_SHELL=$(getent passwd "$USER_NAME" | cut -d: -f7)
 if [[ $CURRENT_SHELL == /usr/bin/fish ]]; then
     step "Login shell"
     info "already fish"
+    DID_CHANGE_SHELL=1
 elif step_ask "Login shell ($CURRENT_SHELL -> fish)"; then
     chsh -s /usr/bin/fish "$USER_NAME"
+    DID_CHANGE_SHELL=1
     info "$CURRENT_SHELL -> /usr/bin/fish"
 else
     info "left as $CURRENT_SHELL"
@@ -351,6 +374,7 @@ if [[ $SKIP_LINK == 1 ]]; then
     warn "config linking skipped"
 else
     if step_ask "niri config"; then
+        DID_LINK_CONFIG=1
         NIRI_CFG="$USER_HOME/.config/niri"
         as_user mkdir -p "$USER_HOME/.config" "$USER_HOME/.local/bin"
 
@@ -420,6 +444,9 @@ else
         fi
 
         as_user mkdir -p "$USER_HOME/Pictures/Wallpapers" "$USER_HOME/Pictures/Screenshots"
+    else
+        warn "~/.config/niri not linked — niri will start on its own defaults"
+        TODO+=("link the config: ln -s $REPO_ROOT ~/.config/niri (and bin/ into ~/.local/bin)")
     fi
 
     if step_ask "fish config"; then
@@ -435,6 +462,9 @@ else
         # fish_variables references fisher; the plugin manager itself is not a
         # pacman package and installs from inside fish.
         TODO+=("optional: install fisher — curl -sL https://git.io/fisher | source && fisher update")
+    else
+        warn "fish keeps its default config; the prompt and abbreviations are not installed"
+        TODO+=("link the shell config: ln -s $REPO_ROOT/dots/fish ~/.config/fish")
     fi
 
     if step_ask "kitty config"; then
@@ -462,6 +492,9 @@ else
         info "$KITTY_CFG/kitty.conf -> $REPO_ROOT/dots/kitty/kitty.conf"
         # No TODO here: dots/noctalia/settings.toml enables the kitty template, so
         # colours follow the wallpaper from first login.
+    else
+        warn "kitty keeps its defaults — no palette, no padding, no font settings"
+        TODO+=("link kitty.conf: ln -s $REPO_ROOT/dots/kitty/kitty.conf ~/.config/kitty/kitty.conf")
     fi
 
     if step_ask "telegram palette template"; then
@@ -477,6 +510,9 @@ else
         info "$TG_TEMPLATE_DIR -> $REPO_ROOT/dots/telegram"
         # The theme file itself cannot be applied from outside Telegram.
         TODO+=("Telegram: Settings -> Chat Settings -> Themes -> ... -> Open theme file, pick ~/.config/telegram-desktop/themes/noctalia.tdesktop-theme")
+    else
+        warn "Telegram will not follow the wallpaper — the palette template is not linked"
+        TODO+=("link the template: ln -s $REPO_ROOT/dots/telegram ~/.config/noctalia/telegram")
     fi
 
     if step_ask "neovim (LVim)"; then
@@ -496,6 +532,9 @@ else
             warn "could not clone LVim"
             TODO+=("clone https://github.com/ivanovichelovek/LVim.git into ~/.config/nvim")
         fi
+    else
+        warn "~/.config/nvim left alone — nvim starts unconfigured"
+        TODO+=("clone https://github.com/ivanovichelovek/LVim.git into ~/.config/nvim")
     fi
 
     if step_ask "app configs"; then
@@ -546,6 +585,9 @@ else
             fi
         done
         TODO+=("re-add your Happ subscriptions — subs.db is not in the repo")
+    else
+        warn "noctalia and Happ start unconfigured; noctalia picks its own wallpaper"
+        TODO+=("seed the app configs by re-running this step")
     fi
 
 fi
@@ -662,9 +704,18 @@ fi
 
 # ─── services ───────────────────────────────────────────────────────────────
 if step_ask "Services (NetworkManager, bluetooth)"; then
-    systemctl enable NetworkManager.service
-    systemctl enable bluetooth.service
-    info "NetworkManager, bluetooth enabled"
+    # Never fatal. A missing unit here (packages step declined, or a base system
+    # that ships something other than NetworkManager) used to kill the script on
+    # its last step under `set -e`: the install had fully succeeded, and all the
+    # user saw was an enable failure with the summary and TODO list never printed.
+    for unit in NetworkManager.service bluetooth.service; do
+        if systemctl enable "$unit" 2>/dev/null; then
+            info "$unit enabled"
+        else
+            warn "could not enable $unit — not installed?"
+            TODO+=("systemctl enable --now $unit")
+        fi
+    done
 else
     warn "skipped — without NetworkManager there may be no network after reboot"
     TODO+=("systemctl enable --now NetworkManager.service bluetooth.service")
@@ -678,8 +729,8 @@ step "Done"
 cat <<EOF
 
   Installed for: $USER_NAME
-  niri config:   ~/.config/niri -> $REPO_ROOT
-  shell:         fish
+  niri config:   $( ((DID_LINK_CONFIG)) && echo "~/.config/niri -> $REPO_ROOT" || echo "NOT linked — step skipped")
+  shell:         $( ((DID_CHANGE_SHELL)) && echo "fish" || echo "$CURRENT_SHELL — unchanged")
   greeter:       $([[ $SKIP_GREETER == 1 ]] && echo "none" || echo "$GREETER")
 
   Workspaces and their apps (see config.d/90-user-extra.kdl):

@@ -79,6 +79,14 @@ runs, and a run with no tty never prompts at all rather than hanging on `read`.
 
 A `--skip-*` flag still wins over its prompt: that step is not even offered.
 
+Declining is meant to be survivable, so the failure modes are blunted: a step
+that is skipped says what it costs and leaves a line in the closing "Still to
+do" list, the final summary reports what actually happened rather than what was
+planned, and neither a `pacman` failure nor a missing systemd unit aborts the
+run — both warn and carry on. `networkmanager` is in `PKGS` despite the header
+calling it part of the assumed base system: `pacstrap base` does not pull it in,
+and the services step then failed to enable a unit that was never installed.
+
 ### Wallpapers
 
 The 8 images (83 MB) are in a **separate repository**,
