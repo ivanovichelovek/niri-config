@@ -27,9 +27,16 @@ environment {
     QT_QPA_PLATFORMTHEME "kde"
     QT_STYLE_OVERRIDE "Darkly"
 
-    // Still dropped: XDG_MENU_PREFIX (Plasma menu prefix, needs kbuildsycoca6
-    // from kservice — nothing here builds a Plasma menu).
-    //
+    // Required by Dolphin, not optional. kbuildsycoca6 builds its application
+    // index by walking $XDG_MENU_PREFIX+applications.menu, and Arch's
+    // plasma-workspace only ships /etc/xdg/menus/plasma-applications.menu —
+    // there is no plain applications.menu. Unset, kbuildsycoca6 finds no menu,
+    // indexes zero apps, and every KIO app-lookup comes up empty: "Open With"
+    // lists nothing and double-clicking any file prompts instead of opening it.
+    // Changing this changes the ksycoca cache key, so rebuild after editing:
+    //   kbuildsycoca6 --noincremental
+    XDG_MENU_PREFIX "plasma-"
+
     // Dropped when moving off iNiR — these were Quickshell/illogical-impulse only:
     //   QT_LOGGING_RULES "quickshell.dbus.properties=false"
     //   INIR_VENV "$HOME/.local/state/quickshell/.venv"
