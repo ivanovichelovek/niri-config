@@ -203,8 +203,9 @@ Restore never overwrites: existing state is moved to `.bak.<timestamp>` first.
 
 `bin/random-wallpaper` — `Ctrl+Alt+W`, or "Random Wallpaper" in the launcher.
 A reel of random images: each frame is shown full-size, you keep it or drop it,
-and the window **stays open and advances to the next one**. Three frames are
-downloaded ahead of the current one, so the next is already there.
+and the window **stays open and advances to the next one**. Nine frames are
+downloaded ahead of the current one — ten in the reel counting the current —
+so the next is already there. `REEL_AHEAD` at the top of the script sets it.
 
 | key | button | effect |
 |---|---|---|

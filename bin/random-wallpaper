@@ -49,7 +49,7 @@ USER_AGENT = (
 )
 
 TIMEOUT = 30
-REEL_AHEAD = 3          # frames kept downloaded ahead of the current one
+REEL_AHEAD = 9          # frames kept downloaded ahead of the current one
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")
 
 ORIENTATIONS = [
