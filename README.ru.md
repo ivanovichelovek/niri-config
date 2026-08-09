@@ -126,8 +126,8 @@ noctalia переводятся на обои, которые она прино�
 
 ```kdl
 binds {
-    Super+E hotkey-overlay-title="Open the File Manager: Dolphin" {
-        spawn "dolphin"
+    Super+E hotkey-overlay-title="Open the File Manager: nautilus" {
+        spawn "nautilus"
     }
 }
 ```
@@ -137,9 +137,10 @@ binds {
 установке выполните
 `cp config.d/99-local.kdl.example config.d/99-local.kdl` до запуска niri.
 
-Файловый менеджер в репозитории — **nautilus**, тот же, что у iNiR. Dolphin
-пробовали и откатили; на машине, где это писалось, он остаётся именно через
-показанное выше переопределение.
+Файловый менеджер в репозитории — **Dolphin**, и он единственный: тема Qt в
+`dots/qt/` существует ради него. Ему обязателен `XDG_MENU_PREFIX` (см.
+`40-environment.kdl`), без которого он не открывает ничего вообще. Собственные
+`dolphinrc` и `kservicemenurc` здесь не отслеживаются.
 
 ## Структура файлов
 

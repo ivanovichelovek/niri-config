@@ -38,10 +38,16 @@ wrong from the first wallpaper change onwards.
 Verified on this machine: `kdeglobals` came out with `BackgroundNormal=16,20,24`,
 which is `#101418` — the same background kitty's generated theme carries.
 
-## The file manager is nautilus
+## The file manager is Dolphin
 
-This directory is not about a file manager. The bind in `70-binds.kdl` spawns
-`nautilus`, which is what iNiR itself uses. Dolphin was tried here and reverted;
-if you want it, that is what `config.d/99-local.kdl` is for — see the README's
-"Local overrides". Its own `dolphinrc` and `kservicemenurc` are not tracked in
-this repo.
+This directory is what Dolphin sits on top of: the bind in `70-binds.kdl` spawns
+it, and it is the only file manager the repo ships. Its own `dolphinrc` and
+`kservicemenurc` are not tracked here.
+
+One thing outside this directory is not optional for it: `XDG_MENU_PREFIX` in
+`config.d/40-environment.kdl`. `kbuildsycoca6` builds KDE's application index by
+walking `$XDG_MENU_PREFIX + applications.menu`, and Arch ships only
+`plasma-applications.menu`. Unset, the index comes out empty, and Dolphin's
+"Open With" lists nothing while double-clicking any file prompts instead of
+opening it — the Qt theming here is intact and it still looks like Dolphin is
+broken.

@@ -222,8 +222,12 @@ PKGS=(
     # bin/random-wallpaper is a GTK4 app (no libadwaita — it ships its own
     # theme); it talks to both wallpaper APIs with stdlib urllib.
     python-gobject gtk4 librsvg
-    # apps
-    telegram-desktop nautilus
+    # apps. Dolphin is the file manager (Super+E in 70-binds.kdl); ark, okular
+    # and imv are what it hands archives, documents and images to. Note that
+    # the associations themselves live in ~/.config/mimeapps.list, which this
+    # repo does not track — a fresh install gets the apps but picks its own
+    # defaults until you set them.
+    telegram-desktop dolphin ark okular imv
     # Qt theming, so Qt apps follow the session instead of falling back to their
     # own default styling. QT_QPA_PLATFORMTHEME "kde" in 40-environment.kdl
     # needs plasma-integration; kde-cli-tools backs the file dialogs and the

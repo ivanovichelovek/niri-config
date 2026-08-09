@@ -97,7 +97,7 @@ binds {
 
     Mod+T hotkey-overlay-title="Open a Terminal: kitty" { spawn "kitty" "-1"; }
     Mod+Return hotkey-overlay-title="Open a Terminal: kitty" { spawn "kitty" "-1"; }
-    Super+E hotkey-overlay-title="Open the File Manager: nautilus" { spawn "nautilus"; }
+    Super+E hotkey-overlay-title="Open the File Manager: Dolphin" { spawn "dolphin"; }
     Super+W hotkey-overlay-title="Open the Browser: Zen" { spawn "zen-browser"; }
 
     // ═══════════════════════════════════════════════════════════════════════

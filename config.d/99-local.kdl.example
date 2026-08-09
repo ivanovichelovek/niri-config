@@ -12,11 +12,12 @@
 // `include` fails hard on a missing file, which is why the empty copy exists at
 // all rather than being created only when you want an override.
 //
-// Example — a different file manager on this machine only:
+// Example — a different file manager on this machine only (the repo ships
+// Dolphin; this would put nautilus on Super+E here and nowhere else):
 //
 //   binds {
-//       Super+E hotkey-overlay-title="Open the File Manager: Dolphin" {
-//           spawn "dolphin"
+//       Super+E hotkey-overlay-title="Open the File Manager: nautilus" {
+//           spawn "nautilus"
 //       }
 //   }
 //

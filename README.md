@@ -122,8 +122,8 @@ different without a permanently dirty working tree.
 
 ```kdl
 binds {
-    Super+E hotkey-overlay-title="Open the File Manager: Dolphin" {
-        spawn "dolphin"
+    Super+E hotkey-overlay-title="Open the File Manager: nautilus" {
+        spawn "nautilus"
     }
 }
 ```
@@ -132,9 +132,10 @@ binds {
 `bootstrap.sh` creates it from `99-local.kdl.example`, and a manual clone should
 `cp config.d/99-local.kdl.example config.d/99-local.kdl` before running niri.
 
-The file manager the repo ships is **nautilus**, which is what iNiR uses too.
-Dolphin was tried and reverted; the machine this was written on keeps it through
-exactly the override above.
+The file manager the repo ships is **Dolphin**, and it is the only one — the
+Qt theming under `dots/qt/` exists to back it. It needs `XDG_MENU_PREFIX` set
+(see `40-environment.kdl`), without which it opens nothing at all. Its own
+`dolphinrc` and `kservicemenurc` are not tracked here.
 
 ## Layout
 
