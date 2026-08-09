@@ -5,9 +5,11 @@
 # xdg-desktop-portal-gnome, which serves ScreenCast under niri.
 #
 # ~/.local/share/dbus-1/services takes precedence over /usr/share, so this file
-# settles it: "Show in file manager" / "Open containing folder" from GTK apps,
-# Chrome and Telegram opens Dolphin. This path does NOT go through
-# mimeapps.list, so blocking nautilus there is not enough on its own.
+# settles it. D-Bus activation cannot read mimeapps.list — it matches a bus name
+# to a .service file and stops there — so rather than naming a file manager
+# here, it activates a script that looks the default up and exec's it. One
+# source of truth: change the inode/directory default and "Show in file manager"
+# from GTK apps, Chrome and Telegram follows it on the next activation.
 [D-BUS Service]
 Name=org.freedesktop.FileManager1
-Exec=/usr/bin/dolphin --daemon
+Exec=/home/ivanc/.local/bin/filemanager1-dispatch

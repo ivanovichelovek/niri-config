@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+#
+# Hand org.freedesktop.FileManager1 to whatever mimeapps.list says opens folders.
+#
+# D-Bus activation has no notion of mimeapps.list: it picks a .service file by
+# bus name and that is the end of it. When two file managers each ship one for
+# this name — dolphin and nautilus both do — which wins is undefined, and it can
+# disagree with the default that double-clicking a folder uses. The two ways of
+# opening a directory then land in different apps.
+#
+# This script is what the .service activates. It resolves the default handler
+# for inode/directory, finds the FileManager1 implementation belonging to that
+# app, and exec's it, so the real file manager claims the bus name and serves
+# ShowFolders/ShowItems/ShowItemProperties itself. Change the default with
+# xdg-mime or from any file manager's settings, and this follows on the next
+# activation — no file here to edit.
+#
+#   --print   resolve and print the command instead of running it
+#
+set -euo pipefail
+
+FALLBACK=(/usr/bin/dolphin --daemon)
+BUS_NAME="org.freedesktop.FileManager1"
+SELF=$(readlink -f "${BASH_SOURCE[0]}")
+
+data_dirs() {
+    # XDG_DATA_DIRS is frequently unset under a non-desktop-environment session;
+    # the spec default is what QStandardPaths and glib fall back to.
+    local dirs=${XDG_DATA_DIRS:-/usr/local/share:/usr/share}
+    printf '%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}"
+    printf '%s\n' "${dirs//:/$'\n'}"
+}
+
+# First token of an Exec= line, minus any directory part: `dolphin` for
+# "/usr/bin/dolphin --daemon". Field codes (%u, %F) never appear first.
+exec_binary() {
+    local line=${1#Exec=}
+    local first=${line%% *}
+    basename -- "$first"
+}
+
+# Locate a .desktop file by its id (org.kde.dolphin.desktop) across the data
+# dirs, honouring the subdirectory-as-dash convention in the id.
+find_desktop_file() {
+    local id=$1 dir
+    while read -r dir; do
+        [[ -f "$dir/applications/$id" ]] && { printf '%s\n' "$dir/applications/$id"; return 0; }
+    done < <(data_dirs)
+    return 1
+}
+
+resolve() {
+    local default_id binary dir service name exec_line
+
+    default_id=$(xdg-mime query default inode/directory 2>/dev/null) || true
+    [[ -n $default_id ]] || return 1
+
+    local desktop_file
+    desktop_file=$(find_desktop_file "$default_id") || return 1
+    binary=$(exec_binary "$(grep -m1 '^Exec=' "$desktop_file")")
+    [[ -n $binary ]] || return 1
+
+    # Find the D-Bus service file that claims FileManager1 for that same binary.
+    # Skip any whose Exec is this script, or activation would recurse into it.
+    while read -r dir; do
+        for service in "$dir"/dbus-1/services/*.service; do
+            [[ -f $service ]] || continue
+            name=$(grep -m1 '^Name=' "$service" | cut -d= -f2-)
+            [[ $name == "$BUS_NAME" ]] || continue
+            exec_line=$(grep -m1 '^Exec=' "$service")
+            [[ -n $exec_line ]] || continue
+            [[ $(readlink -f "${exec_line#Exec=}" 2>/dev/null) == "$SELF" ]] && continue
+            if [[ $(exec_binary "$exec_line") == "$binary" ]]; then
+                printf '%s\n' "${exec_line#Exec=}"
+                return 0
+            fi
+        done
+    done < <(data_dirs)
+
+    # No FileManager1 service for it — many file managers implement the
+    # interface without shipping a separate .service, so try the binary itself.
+    command -v "$binary" >/dev/null && { printf '%s --daemon\n' "$binary"; return 0; }
+    return 1
+}
+
+if command_line=$(resolve); then
+    read -r -a argv <<<"$command_line"
+else
+    echo "no FileManager1 implementation for the inode/directory default;" \
+         "falling back to ${FALLBACK[*]}" >&2
+    argv=("${FALLBACK[@]}")
+fi
+
+if [[ ${1-} == --print ]]; then
+    printf '%s\n' "${argv[*]}"
+    exit 0
+fi
+
+exec "${argv[@]}"

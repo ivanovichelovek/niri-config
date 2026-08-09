@@ -446,7 +446,7 @@ else
 
         for s in lock-and-suspend niri-toggle-gaps wlsunset-restart \
                  random-wallpaper claude-state noctalia-telegram-theme \
-                 unar-here fix-legacy-names; do
+                 unar-here fix-legacy-names filemanager1-dispatch; do
             as_user ln -sf "$REPO_ROOT/bin/$s" "$USER_HOME/.local/bin/$s"
         done
         info "helper scripts linked into ~/.local/bin"
@@ -460,9 +460,10 @@ else
         done
         info "Dolphin service menus linked into ~/.local/share/kio/servicemenus"
 
-        # Dolphin wins org.freedesktop.FileManager1. nautilus ships a .service
-        # claiming the same name and cannot be uninstalled (see the package
-        # list), and ~/.local/share beats /usr/share.
+        # org.freedesktop.FileManager1 follows mimeapps.list. nautilus ships a
+        # .service claiming that name too and cannot be uninstalled (see the
+        # package list); ~/.local/share beats /usr/share, and what this one
+        # activates is bin/filemanager1-dispatch rather than a fixed app.
         as_user mkdir -p "$USER_HOME/.local/share/dbus-1/services"
         as_user ln -sf "$REPO_ROOT/share/dbus-1/services/org.freedesktop.FileManager1.service" \
                 "$USER_HOME/.local/share/dbus-1/services/org.freedesktop.FileManager1.service"

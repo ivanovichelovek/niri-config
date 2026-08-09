@@ -155,9 +155,18 @@ in both places that can choose a file manager:
 - `share/mimeapps.list` — a `[Removed Associations]` section covering every type
   nautilus declares, so it is not even offered for folders or archives
 - `share/dbus-1/services/org.freedesktop.FileManager1.service` — nautilus and
-  Dolphin both claim that bus name and which one wins is undefined, so this
-  pins it to Dolphin. "Show in file manager" from GTK apps does not consult
+  Dolphin both claim that bus name and which one wins is undefined. "Show in
+  file manager" from GTK apps goes through it and never consults
   mimeapps.list, so the first bullet alone would not cover it.
+
+D-Bus activation genuinely cannot read mimeapps.list: it matches a bus name to
+a `.service` file and stops there. So that service does not name a file manager
+— it activates `bin/filemanager1-dispatch`, which reads the `inode/directory`
+default, finds the FileManager1 implementation belonging to that app, and
+`exec`s it, letting the real file manager claim the name and serve the
+interface. Set the default anywhere — `xdg-mime`, Dolphin's settings, the
+"Open With" dialog — and both ways of opening a folder follow it. Run it with
+`--print` to see what it resolves to without launching anything.
 
 ## Layout
 
