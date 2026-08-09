@@ -445,11 +445,24 @@ else
         info "$NIRI_CFG -> $REPO_ROOT"
 
         for s in lock-and-suspend niri-toggle-gaps wlsunset-restart \
-                 random-wallpaper claude-state noctalia-telegram-theme \
+                 claude-state noctalia-telegram-theme \
                  unar-here fix-legacy-names filemanager1-dispatch; do
             as_user ln -sf "$REPO_ROOT/bin/$s" "$USER_HOME/.local/bin/$s"
         done
         info "helper scripts linked into ~/.local/bin"
+
+        # random-wallpaper goes system-wide instead. It is the one helper with a
+        # .desktop entry, and a desktop entry is launched by whatever PATH the
+        # launcher happens to have — which is not the shell's. /usr/bin is on
+        # every PATH there is, so the entry can name an absolute path that does
+        # not depend on $HOME either.
+        #
+        # A symlink rather than a copy, to match the rest of bin/: edits to the
+        # repo are live, with no reinstall step. It does mean /usr/bin holds a
+        # root-owned link into $USER_HOME, so it dangles if the repo moves —
+        # rerunning this step fixes that.
+        ln -sfn "$REPO_ROOT/bin/random-wallpaper" /usr/bin/random-wallpaper
+        info "/usr/bin/random-wallpaper -> $REPO_ROOT/bin/random-wallpaper"
 
         # Dolphin right-click actions. These are what unar-here and
         # fix-legacy-names are reached through, so they follow the scripts.
