@@ -2,7 +2,7 @@
 Type=Application
 Name=Random Wallpaper
 Comment=Download a random wallpaper and keep it or throw it away
-Exec=/home/ivanc/.local/bin/random-wallpaper
+Exec=/usr/bin/random-wallpaper
 Icon=dev.ivanc.RandomWallpaper
 Terminal=false
 Categories=Graphics;Utility;
@@ -12,8 +12,8 @@ Actions=Konachan;Wallhaven;
 
 [Desktop Action Konachan]
 Name=From Konachan
-Exec=/home/ivanc/.local/bin/random-wallpaper --source konachan
+Exec=/usr/bin/random-wallpaper --source konachan
 
 [Desktop Action Wallhaven]
 Name=From Wallhaven
-Exec=/home/ivanc/.local/bin/random-wallpaper --source wallhaven
+Exec=/usr/bin/random-wallpaper --source wallhaven
