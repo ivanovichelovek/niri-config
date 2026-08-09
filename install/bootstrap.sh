@@ -223,10 +223,17 @@ PKGS=(
     # theme); it talks to both wallpaper APIs with stdlib urllib.
     python-gobject gtk4 librsvg
     # apps. Dolphin is the file manager (Super+E in 70-binds.kdl); ark, okular
-    # and imv are what it hands archives, documents and images to. Note that
-    # the associations themselves live in ~/.config/mimeapps.list, which this
-    # repo does not track — a fresh install gets the apps but picks its own
-    # defaults until you set them.
+    # and imv are what it hands archives, documents and images to. The
+    # associations are in share/mimeapps.list, copied into place further down.
+    #
+    # nautilus is deliberately NOT listed and equally deliberately not removed:
+    # it is a hard dependency of xdg-desktop-portal-gnome above, which is the
+    # only portal backend serving ScreenCast under niri (niri implements
+    # org.gnome.Mutter.ScreenCast and that backend is what translates portal
+    # calls into it — see the niri README). Removing it costs screen sharing.
+    # So it stays on disk and is kept from ever being chosen, in both places
+    # that can choose it: [Removed Associations] in share/mimeapps.list, and
+    # the FileManager1 D-Bus override in share/dbus-1/services/.
     telegram-desktop dolphin ark okular imv
     # unarchiver provides `unar`, which sniffs the codepage of legacy archive
     # entry names. Ark's libzip backend follows the spec and reads unflagged
@@ -452,6 +459,26 @@ else
             as_user ln -sf "$d" "$SERVICEMENU_DIR/$(basename "$d")"
         done
         info "Dolphin service menus linked into ~/.local/share/kio/servicemenus"
+
+        # Dolphin wins org.freedesktop.FileManager1. nautilus ships a .service
+        # claiming the same name and cannot be uninstalled (see the package
+        # list), and ~/.local/share beats /usr/share.
+        as_user mkdir -p "$USER_HOME/.local/share/dbus-1/services"
+        as_user ln -sf "$REPO_ROOT/share/dbus-1/services/org.freedesktop.FileManager1.service" \
+                "$USER_HOME/.local/share/dbus-1/services/org.freedesktop.FileManager1.service"
+        info "FileManager1 D-Bus name pinned to Dolphin"
+
+        # Default applications. Copied rather than linked: Dolphin and every
+        # other app rewrites this file whenever you tick "set as default", and a
+        # symlink would leave the repo permanently dirty. Its [Removed
+        # Associations] section is what keeps nautilus from ever being offered.
+        if [[ -f "$USER_HOME/.config/mimeapps.list" ]]; then
+            info "mimeapps.list already present — left alone"
+            TODO+=("compare ~/.config/mimeapps.list with share/mimeapps.list")
+        else
+            as_user cp "$REPO_ROOT/share/mimeapps.list" "$USER_HOME/.config/mimeapps.list"
+            info "mimeapps.list copied"
+        fi
 
         # XDG_MENU_PREFIX again, for D-Bus/systemd-activated services (kded6,
         # kiod6, xdg-desktop-portal-kde). 40-environment.kdl covers what niri

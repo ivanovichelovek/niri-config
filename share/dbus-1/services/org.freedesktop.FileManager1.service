@@ -1,0 +1,13 @@
+# Both dolphin and nautilus ship a .service file claiming this same bus name
+# (org.kde.dolphin.FileManager1.service and org.freedesktop.FileManager1.service
+# under /usr/share/dbus-1/services). Which one wins the activation is not
+# defined, and nautilus cannot simply be removed — it is a hard dependency of
+# xdg-desktop-portal-gnome, which serves ScreenCast under niri.
+#
+# ~/.local/share/dbus-1/services takes precedence over /usr/share, so this file
+# settles it: "Show in file manager" / "Open containing folder" from GTK apps,
+# Chrome and Telegram opens Dolphin. This path does NOT go through
+# mimeapps.list, so blocking nautilus there is not enough on its own.
+[D-BUS Service]
+Name=org.freedesktop.FileManager1
+Exec=/usr/bin/dolphin --daemon

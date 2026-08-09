@@ -140,10 +140,24 @@ binds {
 `bootstrap.sh` creates it from `99-local.kdl.example`, and a manual clone should
 `cp config.d/99-local.kdl.example config.d/99-local.kdl` before running niri.
 
-The file manager the repo ships is **Dolphin**, and it is the only one — the
-Qt theming under `dots/qt/` exists to back it. It needs `XDG_MENU_PREFIX` set
-(see `40-environment.kdl`), without which it opens nothing at all. Its own
+The file manager the repo ships is **Dolphin**, and it is the only one used —
+the Qt theming under `dots/qt/` exists to back it. It needs `XDG_MENU_PREFIX`
+set (see `40-environment.kdl`), without which it opens nothing at all. Its own
 `dolphinrc` and `kservicemenurc` are not tracked here.
+
+nautilus is still installed, and that is on purpose. It is a hard dependency of
+`xdg-desktop-portal-gnome`, the only portal backend that serves `ScreenCast`
+under niri — niri implements `org.gnome.Mutter.ScreenCast` itself and that
+backend translates portal calls into it, so removing nautilus costs screen
+sharing in Discord, browsers and OBS. It is instead kept from ever being chosen,
+in both places that can choose a file manager:
+
+- `share/mimeapps.list` — a `[Removed Associations]` section covering every type
+  nautilus declares, so it is not even offered for folders or archives
+- `share/dbus-1/services/org.freedesktop.FileManager1.service` — nautilus and
+  Dolphin both claim that bus name and which one wins is undefined, so this
+  pins it to Dolphin. "Show in file manager" from GTK apps does not consult
+  mimeapps.list, so the first bullet alone would not cover it.
 
 ## Layout
 
