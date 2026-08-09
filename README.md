@@ -64,6 +64,14 @@ All helper scripts live in `bin/` and are symlinked into `~/.local/bin`:
 `lock-and-suspend`). `claude-state` lives there too but is run by hand — see
 [Moving to a new machine](#moving-to-a-new-machine).
 
+`unar-here` and `fix-legacy-names` are reached from Dolphin's right-click menu
+(`share/kio/servicemenus/`) rather than the shell. Ark's libzip backend follows
+the spec and reads archive entry names without the UTF-8 flag as CP437, so a
+Windows-made ZIP with CP866 names extracts as `ÉπíÑª¡¿¬¿`. `unar-here` extracts
+through `unar`, which sniffs the codepage instead; `fix-legacy-names` walks a
+directory and undoes the damage on names already written that way. Ark itself
+has no encoding setting, so its own "Extract here" is still the mangling one.
+
 Stray touchpad clicks in nvim are handled in nvim itself (`mouse = ""` in
 `~/.config/nvim/lua/config/options.lua`), not by disabling the device. An
 earlier `niri-nvim-touchpad` daemon did the latter with an `EVIOCGRAB` and is

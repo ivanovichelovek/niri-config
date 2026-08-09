@@ -228,6 +228,11 @@ PKGS=(
     # repo does not track — a fresh install gets the apps but picks its own
     # defaults until you set them.
     telegram-desktop dolphin ark okular imv
+    # unarchiver provides `unar`, which sniffs the codepage of legacy archive
+    # entry names. Ark's libzip backend follows the spec and reads unflagged
+    # names as CP437, so a Windows-made ZIP with CP866 names extracts as
+    # mojibake; bin/unar-here and the service menu above are the way around it.
+    unarchiver
     # Qt theming, so Qt apps follow the session instead of falling back to their
     # own default styling. QT_QPA_PLATFORMTHEME "kde" in 40-environment.kdl
     # needs plasma-integration; kde-cli-tools backs the file dialogs and the
@@ -433,10 +438,30 @@ else
         info "$NIRI_CFG -> $REPO_ROOT"
 
         for s in lock-and-suspend niri-toggle-gaps wlsunset-restart \
-                 random-wallpaper claude-state noctalia-telegram-theme; do
+                 random-wallpaper claude-state noctalia-telegram-theme \
+                 unar-here fix-legacy-names; do
             as_user ln -sf "$REPO_ROOT/bin/$s" "$USER_HOME/.local/bin/$s"
         done
         info "helper scripts linked into ~/.local/bin"
+
+        # Dolphin right-click actions. These are what unar-here and
+        # fix-legacy-names are reached through, so they follow the scripts.
+        SERVICEMENU_DIR="$USER_HOME/.local/share/kio/servicemenus"
+        as_user mkdir -p "$SERVICEMENU_DIR"
+        for d in "$REPO_ROOT"/share/kio/servicemenus/*.desktop; do
+            as_user ln -sf "$d" "$SERVICEMENU_DIR/$(basename "$d")"
+        done
+        info "Dolphin service menus linked into ~/.local/share/kio/servicemenus"
+
+        # XDG_MENU_PREFIX again, for D-Bus/systemd-activated services (kded6,
+        # kiod6, xdg-desktop-portal-kde). 40-environment.kdl covers what niri
+        # spawns and dots/fish covers terminals, but neither reaches these — and
+        # any one of them rebuilding ksycoca without the prefix empties the
+        # application index. See config.d/40-environment.kdl for what that costs.
+        as_user mkdir -p "$USER_HOME/.config/environment.d"
+        as_user ln -sf "$REPO_ROOT/share/environment.d/10-xdg-menu-prefix.conf" \
+                "$USER_HOME/.config/environment.d/10-xdg-menu-prefix.conf"
+        info "environment.d drop-in linked into ~/.config/environment.d"
 
         # Desktop entries, so the shell launcher can find random-wallpaper too.
         as_user mkdir -p "$USER_HOME/.local/share/applications"

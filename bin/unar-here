@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Extract archives next to themselves with unar, which sniffs the codepage of
+# legacy (non-UTF-8) entry names instead of assuming CP437 the way Ark's libzip
+# backend does. Exists as a script so the Dolphin service menu's Exec= line
+# stays free of shell quoting, which the desktop-entry spec does not allow.
+set -euo pipefail
+
+if ! command -v unar >/dev/null; then
+    echo "unar is not installed — run: sudo pacman -S unarchiver" >&2
+    exit 1
+fi
+
+for archive in "$@"; do
+    echo "==> $archive"
+    unar -o "$(dirname -- "$archive")" -- "$archive"
+done

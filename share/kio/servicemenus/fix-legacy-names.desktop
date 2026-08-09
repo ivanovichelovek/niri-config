@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Repair legacy-codepage names
+Name[ru]=Починить имена в старой кодировке
+Icon=edit-rename
+MimeType=inode/directory;
+Actions=fixNames;
+
+[Desktop Action fixNames]
+Name=Repair legacy-codepage names
+Name[ru]=Починить имена в старой кодировке
+Icon=edit-rename
+Exec=kitty --hold -e fix-legacy-names %F

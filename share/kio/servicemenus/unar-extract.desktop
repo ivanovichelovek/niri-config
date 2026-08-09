@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Extract here (detect encoding)
+Name[ru]=Распаковать здесь (определить кодировку)
+Icon=archive-extract
+MimeType=application/zip;application/x-7z-compressed;application/vnd.rar;application/x-rar;application/x-rar-compressed;
+Actions=extractUnar;
+
+[Desktop Action extractUnar]
+Name=Extract here (detect encoding)
+Name[ru]=Распаковать здесь (определить кодировку)
+Icon=archive-extract
+Exec=kitty --hold -e unar-here %F

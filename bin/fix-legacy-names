@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Repair filenames mangled by extracting a legacy-codepage archive.
+
+A ZIP written on Windows stores names in the OEM codepage (CP866 for Russian)
+without setting the UTF-8 flag. Ark's libzip backend assumes CP437 for such
+entries, so "Рубежники" lands on disk as "ÉπíÑª¡¿¬¿". The bytes survive intact,
+only the decoding was wrong, so the fix is a round-trip: re-encode the name back
+to CP437 and decode it as the codepage it actually was.
+
+Usage:  fix-legacy-names [-n] PATH [PATH ...]
+
+    -n, --dry-run   print the renames without doing them
+
+Directories are walked recursively, deepest entries first so renaming a parent
+never invalidates a path underneath it. Names that are already valid, that do
+not round-trip, or whose repaired form yields no Cyrillic are left alone — as is
+anything whose target name already exists.
+"""
+
+import os
+import sys
+
+# CP866 first: it is what Windows ZIP tools write for Russian. CP1251 is the
+# rarer case (some archivers store the ANSI codepage instead).
+CANDIDATE_CODEPAGES = ("cp866", "cp1251")
+
+
+def repaired(name):
+    """Return the repaired name, or None if this one should be left alone."""
+    try:
+        raw = name.encode("cp437")
+    except UnicodeEncodeError:
+        return None  # not CP437-representable, so not this kind of damage
+    for codepage in CANDIDATE_CODEPAGES:
+        try:
+            candidate = raw.decode(codepage)
+        except UnicodeDecodeError:
+            continue
+        # Only accept a result that actually looks like recovered text.
+        if candidate != name and any("Ѐ" <= c <= "ӿ" for c in candidate):
+            return candidate
+    return None
+
+
+def walk_targets(path):
+    """Yield (directory, name) deepest-first, so parents are renamed last."""
+    if os.path.isdir(path) and not os.path.islink(path):
+        for root, dirs, files in os.walk(path, topdown=False):
+            for name in files + dirs:
+                yield root, name
+    parent, name = os.path.split(os.path.abspath(path))
+    yield parent, name
+
+
+def main(argv):
+    dry_run = False
+    paths = []
+    for arg in argv:
+        if arg in ("-n", "--dry-run"):
+            dry_run = True
+        elif arg in ("-h", "--help"):
+            print(__doc__)
+            return 0
+        else:
+            paths.append(arg)
+
+    if not paths:
+        print(__doc__, file=sys.stderr)
+        return 2
+
+    renamed = 0
+    for path in paths:
+        if not os.path.exists(path):
+            print(f"no such path: {path}", file=sys.stderr)
+            continue
+        for directory, name in walk_targets(path):
+            fixed = repaired(name)
+            if fixed is None:
+                continue
+            src, dst = os.path.join(directory, name), os.path.join(directory, fixed)
+            if os.path.exists(dst):
+                print(f"skip (target exists): {name} -> {fixed}", file=sys.stderr)
+                continue
+            print(f"{name}  ->  {fixed}")
+            if not dry_run:
+                os.rename(src, dst)
+            renamed += 1
+
+    if not renamed:
+        print("nothing to repair")
+    elif dry_run:
+        print(f"\n{renamed} name(s) would be repaired; rerun without -n to apply")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
