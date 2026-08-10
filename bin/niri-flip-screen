@@ -1,0 +1,53 @@
+#!/bin/bash
+# Rotate the focused output 180° and back — for showing the screen to someone
+# sitting opposite you (open the lid flat, press the bind, they read it upright).
+# Bound to Mod+Ctrl+Shift+Alt+F in 90-user-extra.kdl.
+#
+# While the built-in panel is flipped, touchpad scrolling is inverted too, so
+# scrolling still moves the page the way it looks like it should. Pointer motion
+# stays as-is: libinput has no axis inversion for relative devices (its
+# calibration matrix is absolute-only), so negating REL_X/REL_Y would need a
+# root-level uinput remapper grabbing the touchpad.
+#
+# `niri msg output` is a temporary change, but a config reload only discards it
+# when the output block itself changes — ours sets no transform, so the flip
+# survives the reload this script does for the scroll setting. To unstick a flip
+# by hand: `niri msg output eDP-1 transform normal`.
+INPUT="$HOME/.config/niri/config.d/10-input-and-cursor.kdl"
+STATE="${XDG_RUNTIME_DIR:-/tmp}/niri-flip-screen.natural-scroll"
+
+# Only the laptop panel gets the touchpad treatment: the touchpad config is
+# global, so inverting it because an external monitor is upside down is wrong.
+BUILTIN="eDP-1"
+
+read -r OUTPUT CURRENT < <(niri msg -j focused-output |
+    python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["name"], d["logical"]["transform"])')
+
+natural_scroll_on() { grep -qE '^\s*natural-scroll\b' "$INPUT"; }
+
+if [ "$CURRENT" = "180" ]; then
+    # Restore the scroll direction the config had before the flip, not a blind
+    # toggle — the baseline may have been edited while flipped.
+    if [ "$OUTPUT" = "$BUILTIN" ] && [ -f "$STATE" ]; then
+        if [ "$(cat "$STATE")" = "on" ]; then
+            sed -i -E 's|^(\s*)//\s*(natural-scroll\b)|\1\2|' "$INPUT"
+        else
+            sed -i -E 's|^(\s*)(natural-scroll\b)|\1// \2|' "$INPUT"
+        fi
+        rm -f "$STATE"
+        niri msg action load-config-file
+    fi
+    niri msg output "$OUTPUT" transform normal
+else
+    if [ "$OUTPUT" = "$BUILTIN" ]; then
+        if natural_scroll_on; then
+            echo on > "$STATE"
+            sed -i -E 's|^(\s*)(natural-scroll\b)|\1// \2|' "$INPUT"
+        else
+            echo off > "$STATE"
+            sed -i -E 's|^(\s*)//\s*(natural-scroll\b)|\1\2|' "$INPUT"
+        fi
+        niri msg action load-config-file
+    fi
+    niri msg output "$OUTPUT" transform 180
+fi

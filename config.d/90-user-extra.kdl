@@ -92,6 +92,10 @@ binds {
     // Focus mode: remove gaps, corner radius and hide the shell bar.
     Mod+Shift+F repeat=false hotkey-overlay-title="Focus mode" { spawn "/home/ivanc/.local/bin/niri-toggle-gaps"; }
 
+    // Flip the focused output 180° (and back) — open the lid flat and let
+    // someone across the table read the screen the right way up.
+    Mod+Ctrl+Shift+Alt+F repeat=false hotkey-overlay-title="Flip screen 180°" { spawn "/home/ivanc/.local/bin/niri-flip-screen"; }
+
     // Download a random wallpaper and preview it before keeping it.
     // Saves to ~/random_wallpaper only when you press Save; Delete throws the
     // download away. Also in the launcher as "Random Wallpaper".
