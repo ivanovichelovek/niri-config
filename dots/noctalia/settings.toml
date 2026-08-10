@@ -46,6 +46,15 @@ widget_order = [ "lockscreen-login-box@eDP-1" ]
 telemetry_enabled = true
 
 [theme]
+# The palette follows the wallpaper, but light/dark does not: pinned here so a
+# bright wallpaper cannot flip the whole shell to a light scheme.
+#
+# Worth knowing when this looks like it is being ignored: favourited wallpapers
+# carry their own theme_mode, and that overrides this one. Those live in the
+# runtime settings.toml (they are per-machine, so not carried here) — check
+# `noctalia msg theme-mode-get` for what actually resolved, since the value
+# below can read "dark" while a favourite forces light.
+mode = "dark"
 # source/wallpaper_scheme match noctalia's own defaults; spelled out so the
 # palette-follows-wallpaper behaviour is visible here rather than implied.
 source = "wallpaper"
