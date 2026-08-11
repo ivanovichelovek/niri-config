@@ -1,0 +1,40 @@
+[Desktop Entry]
+# Zen installed from the upstream tarball by install/zen-install.sh — that
+# archive ships no .desktop of its own, unlike the AUR package it replaces.
+#
+# The basename matters: share/mimeapps.list names zen.desktop as the handler for
+# http, https and text/html, so renaming this file unsets the default browser.
+#
+# StartupWMClass matches application.ini's RemotingName=zen, which is also the
+# Wayland app-id the window rules in config.d/ key on (^zen(-browser)?$).
+Type=Application
+Name=Zen Browser
+GenericName=Web Browser
+GenericName[ru]=Веб-браузер
+Comment=A fast, private and secure web browser
+Comment[ru]=Быстрый, приватный и безопасный веб-браузер
+Keywords=Internet;WWW;Browser;Web;Explorer;
+Keywords[ru]=Сеть;Интернет;Браузер;
+Exec=/opt/zen/zen %u
+Icon=zen
+Terminal=false
+StartupNotify=true
+StartupWMClass=zen
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;application/xml;application/rdf+xml;application/rss+xml;application/json;application/pdf;application/x-xpinstall;image/avif;image/gif;image/jpeg;image/png;image/svg+xml;image/webp;audio/flac;audio/ogg;audio/webm;video/ogg;video/webm;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/chrome;x-scheme-handler/mailto;
+Actions=new-window;new-private-window;profilemanager;
+
+[Desktop Action new-window]
+Name=New Window
+Name[ru]=Новое окно
+Exec=/opt/zen/zen %u
+
+[Desktop Action new-private-window]
+Name=New Private Window
+Name[ru]=Новое приватное окно
+Exec=/opt/zen/zen --private-window %u
+
+[Desktop Action profilemanager]
+Name=Open Profile Manager
+Name[ru]=Открыть менеджер профилей
+Exec=/opt/zen/zen --ProfileManager

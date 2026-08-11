@@ -54,9 +54,12 @@ ln -s ~/GitHub/niri-config/dots/telegram ~/.config/noctalia/telegram
 niri validate            # should print "config is valid"
 ```
 
-Requires: `niri`, `noctalia`, `kitty`, `fish`, `zen-browser`, `google-chrome`,
+Requires: `niri`, `noctalia`, `kitty`, `fish`, Zen, `google-chrome`,
 `telegram-desktop`, `yandex-music`, `happ-desktop-bin`, `dolphin`, `cliphist`,
 `wl-clipboard`, and a polkit agent — `bootstrap.sh` installs all of them.
+
+Zen is the one that does not come from a package. See
+[Zen Browser](#zen-browser) below.
 
 All helper scripts live in `bin/` and are symlinked into `~/.local/bin`:
 `lock-and-suspend`, `niri-pin-window`, `niri-toggle-gaps`, `random-wallpaper`,
@@ -309,6 +312,100 @@ middle. A non-zero margin also forces kitty to draw window borders.
 
 `ctrl+f` maps to a `search.py` kitten that is not shipped here — the binding
 does nothing until you drop that kitten into `~/.config/kitty`.
+
+## Zen Browser
+
+Zen is installed from the upstream release tarball rather than from the AUR:
+
+```fish
+sudo ./install/zen-install.sh          # also run by bootstrap.sh
+sudo ./install/zen-install.sh --force  # reinstall the current release
+```
+
+The reason is `zen-browser-bin`. That package ships
+`/opt/zen-browser-bin/distribution/policies.json` with `DisableAppUpdate` —
+which it has to, since a pacman-managed directory must not rewrite itself
+behind pacman's back. But Firefox, and so Zen, treats *any* enterprise policy as
+central management: Settings grows a "Your browser is being managed by your
+organization" banner and the update section reads "Updates disabled by your
+organization". The upstream tarball has no `distribution/` directory at all, so
+neither appears.
+
+What the script does:
+
+- reads the latest tag from the `/releases/latest` redirect (no API token, no
+  rate limit) and compares it against `Version=` in `/opt/zen/application.ini`,
+  so a re-run with nothing new to fetch exits in a second;
+- unpacks into a temp directory and only then moves it over `/opt/zen`, because
+  a download that dies mid-extract straight onto the install directory leaves a
+  half-written browser and no way back. Upstream publishes no checksum or
+  signature for this asset — https and a layout check are the whole of the
+  verification available;
+- `chown -R` to the target user. Zen's own updater writes into its install
+  directory, exactly as on Windows and macOS; root ownership would trade the
+  policy banner for "Check for updates" failing on permissions;
+- symlinks **both** `/usr/bin/zen` and `/usr/bin/zen-browser`, since
+  `config.d/70-binds.kdl` spawns the latter on `Mod+W`. `/usr/bin` rather than
+  `/usr/local/bin` for the same reason as `random-wallpaper` — a bind or a
+  desktop entry runs with the launcher's `PATH`, not the shell's;
+- links `share/applications/zen.desktop` into `/usr/share/applications` and
+  copies the five icon sizes out of `browser/chrome/icons/default` into
+  `hicolor`. The tarball carries no desktop entry of its own, and the basename
+  `zen.desktop` is load-bearing: `share/mimeapps.list` names it as the handler
+  for `http`, `https` and `text/html`;
+- removes `zen-browser-bin` if it is still installed — after the download, so a
+  network failure can't leave the machine with no browser at all, and with plain
+  `pacman -R`, since `-Rns` would drag `gtk3` and `ffmpeg` out with it. Zen's
+  runtime libraries are then re-marked `--asexplicit`: they arrived as that
+  package's dependencies, and the next `pacman -Qtdq | pacman -Rns -` sweep
+  would otherwise take them as orphans. The profile lives in `~/.config/zen`,
+  which neither the removal nor the install touches.
+
+### Reattaching the profile after the switch
+
+Coming from `zen-browser-bin`, the first launch looks as though the profile were
+gone. It is not — nothing outside `/opt`, `/usr/bin` and `/usr/share` is touched,
+and the package owns no file under `$HOME` at all. What changes is that Firefox
+keys a profile to the **install path**: `~/.config/zen/installs.ini` holds one
+`[<hash-of-install-dir>]` section per installation, and that is what picks the
+startup profile. `/opt/zen-browser-bin` and `/opt/zen` hash differently, so Zen
+finds no section of its own, decides it is a new installation, and creates an
+empty profile — `<random>.Default (release)-1` — next to the real one.
+
+Two things that sound like the fix and are not, both tried on a real profile:
+
+- `zen -P "Default (release)"` does open the right profile, but the
+  named-profile path bypasses profile selection entirely, so nothing is written
+  to `installs.ini` and the next plain launch is back on the empty one;
+- setting `Default=1` on the wanted `[ProfileN]` is ignored while that profile
+  is still claimed by the old install's section (`Locked=1`). Zen creates a new
+  profile rather than adopting a claimed one.
+
+What works is repointing the section — which can only happen *after* the launch
+that creates it, since the hash does not exist until then:
+
+1. start Zen once, then close it;
+2. `~/.config/zen/installs.ini` now has a second `[<hash>]` section. Point its
+   `Default=` at the real profile directory, and do the same to the matching
+   `[Install<hash>]` section that has appeared in `profiles.ini`;
+3. delete the section for the old install path and the `[ProfileN]` entry of the
+   empty profile from step 1.
+
+```ini
+; installs.ini, after
+[6977862FCA5BE2EF]
+Default=3spl4sdl.Default (release)
+Locked=1
+```
+
+A plain `zen` then opens the real profile, and stays on it. `zen-install.sh`
+prints an abbreviated version of these steps, with the profile directories
+listed largest first, and only when it has just removed the AUR package.
+
+`application.ini` sets `RemotingName=zen`, so the app-id stays `zen` and the
+window rules in `config.d/` are unaffected. The runtime libraries the tarball
+expects (`gtk3`, `libxt`, `dbus-glib`, `nss`, `mailcap`, `ffmpeg`) are in
+`bootstrap.sh`'s package list, since no package pulls them in any more.
 
 ## Telegram
 

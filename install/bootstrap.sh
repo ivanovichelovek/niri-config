@@ -38,7 +38,7 @@ answer them in one go. Answering no to a step skips it and moves on.
 
 Options:
   -y, --yes          don't ask anything, run every step (for unattended runs)
-  --skip-aur         official repos only (no yay, no zen/chrome/noctalia/…)
+  --skip-aur         official repos only (no yay, no chrome/noctalia/…)
   --skip-greeter     don't install or enable a display manager
   --skip-link        install packages only, don't touch ~/.config
   --skip-wallpapers  don't fetch the wallpaper set
@@ -235,6 +235,11 @@ PKGS=(
     # that can choose it: [Removed Associations] in share/mimeapps.list, and
     # the FileManager1 D-Bus override in share/dbus-1/services/.
     telegram-desktop dolphin ark okular imv
+    # Runtime libraries for Zen, which is installed from the upstream tarball
+    # (install/zen-install.sh) rather than from a package, so nothing pulls
+    # these in on its own. Same list zen-browser-bin declares as its depends:
+    # ffmpeg is already above, and ttf-font is covered by the noto fonts.
+    gtk3 libxt dbus-glib nss mailcap
     # unarchiver provides `unar`, which sniffs the codepage of legacy archive
     # entry names. Ark's libzip backend follows the spec and reads unflagged
     # names as CP437, so a Windows-made ZIP with CP866 names extracts as
@@ -294,17 +299,18 @@ fi
 AUR_PKGS=(
     darkly-bin          # Qt style — QT_STYLE_OVERRIDE in 40-environment.kdl
     noctalia-git        # the shell (v5, native C++ — does NOT need quickshell)
-    zen-browser-bin     # zen
+    # zen is deliberately NOT here — it comes from the upstream tarball, in its
+    # own step below. See install/zen-install.sh for why.
     google-chrome
     yandex-music
     happ-desktop-bin
 )
 
 if [[ $SKIP_AUR == 1 ]]; then
-    warn "AUR skipped — noctalia, zen, chrome, yandex-music and happ NOT installed"
+    warn "AUR skipped — noctalia, chrome, yandex-music and happ NOT installed"
     TODO+=("install AUR packages later: yay -S ${AUR_PKGS[*]}")
 elif ! step_ask "AUR packages (${AUR_PKGS[*]})"; then
-    warn "skipped — noctalia, zen, chrome, yandex-music and happ NOT installed"
+    warn "skipped — noctalia, chrome, yandex-music and happ NOT installed"
     TODO+=("install AUR packages later: yay -S ${AUR_PKGS[*]}")
 else
     step "AUR helper (yay)"
@@ -339,7 +345,7 @@ else
     fi
 
     if (( ! HAVE_YAY )); then
-        warn "no AUR helper — noctalia, zen, chrome, yandex-music and happ NOT installed"
+        warn "no AUR helper — noctalia, chrome, yandex-music and happ NOT installed"
         TODO+=("install yay, then: yay -S ${AUR_PKGS[*]}")
     else
         step "AUR packages"
@@ -350,6 +356,25 @@ else
             TODO+=("re-run: yay -S ${AUR_PKGS[*]}")
         }
     fi
+fi
+
+# ─── Zen ────────────────────────────────────────────────────────────────────
+# Its own step, outside the AUR block on purpose: Zen no longer comes from the
+# AUR, so --skip-aur must not skip it. The whole reason it is a tarball install
+# is that zen-browser-bin ships an enterprise policy which disables the updater
+# and puts a "managed by your organization" banner in Settings — see the header
+# of install/zen-install.sh.
+if step_ask "Zen Browser (upstream tarball -> /opt/zen)"; then
+    # Runs as root, like the rest of this script, and is told which user ends up
+    # owning /opt/zen — Zen's own updater writes into its install directory.
+    if ! bash "$SCRIPT_DIR/zen-install.sh" --user "$USER_NAME"; then
+        warn "Zen was not installed"
+        TODO+=("install Zen: sudo $SCRIPT_DIR/zen-install.sh --user $USER_NAME")
+    fi
+else
+    warn "skipped — Zen NOT installed; Super+W and the http/https defaults have"
+    warn "nothing to open"
+    TODO+=("install Zen: sudo $SCRIPT_DIR/zen-install.sh --user $USER_NAME")
 fi
 
 # ─── shell ──────────────────────────────────────────────────────────────────
@@ -504,7 +529,10 @@ else
                 "$USER_HOME/.config/environment.d/10-xdg-menu-prefix.conf"
         info "environment.d drop-in linked into ~/.config/environment.d"
 
-        # Desktop entries, so the shell launcher can find random-wallpaper too.
+        # Desktop entries, so the shell launcher can find random-wallpaper and
+        # Zen. zen-install.sh links the same zen.desktop into /usr/share as
+        # well, for the case where only that script is run; the user-level copy
+        # wins, and both point at this file.
         as_user mkdir -p "$USER_HOME/.local/share/applications"
         for d in "$REPO_ROOT"/share/applications/*.desktop; do
             as_user ln -sf "$d" "$USER_HOME/.local/share/applications/$(basename "$d")"
