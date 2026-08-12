@@ -25,7 +25,10 @@ if status is-interactive
     alias claer "printf '\033[2J\033[3J\033[1;1H'"
     alias pamcan pacman
     if test "$TERM" != linux
-        alias ls 'eza --icons'
+        # --icons takes an optional WHEN value, so it must be written with "="
+        # — bare `--icons` swallows the next argument (`ls Documents/` would
+        # try to parse "Documents/" as the WHEN and error out).
+        alias ls 'eza --icons=auto'
     end
     if test "$TERM" = xterm-kitty
         alias ssh 'kitten ssh'
