@@ -567,23 +567,55 @@ TODO.
 hybrid machine) override detection — and are how the Intel and NVIDIA paths get
 exercised on a machine that has neither.
 
-The rest of the list is still written for the machine this config comes from, a
-Ryzen 7 5800U laptop with integrated Radeon Vega: `alsa-ucm-conf` for audio,
-nothing for networking because Ethernet (RTL8111), Wi-Fi (RTL8822CE) and its
-bluetooth radio are in-kernel and covered by `linux-firmware`. Note that Intel
-graphics get no VA-API from `mesa` alone — add `intel-media-driver` (Gen8+) if
-you want hardware video decode.
+Nothing is installed for networking: on the target laptop Ethernet (RTL8111),
+Wi-Fi (RTL8822CE) and its bluetooth radio are in-kernel and covered by
+`linux-firmware`. Note that Intel graphics get no VA-API from `mesa` alone — add
+`intel-media-driver` (Gen8+) if you want hardware video decode.
 
-`sof-firmware` is deliberately absent. On this machine sound runs through
-`snd_hda_intel`, and the Audio Coprocessor at `04:00.5` has no driver bound;
-installing SOF firmware can make the kernel bind `snd_sof_amd_renoir` and move
-audio onto a different path. Add it only if the speakers or internal mic are
-actually dead.
+### What the run tells you at the end
 
-47 of the 52 packages in `PKGS` are installed and working on the target laptop
-today. The five that are not: `amd-ucode`, `power-profiles-daemon`,
-`wlr-randr`, `telegram-desktop` — all additive — and `sof-firmware`, now
-removed.
+Because the hardware is now detected rather than listed in the script, reading
+`bootstrap.sh` no longer tells you what you got. The summary does: a **Hardware**
+block naming what was found and what it was given — including what was
+deliberately *not* installed — followed by **Still to do by hand**, which
+collects everything the script refused to decide (an unidentified CPU or GPU, a
+pre-Turing NVIDIA card, unresolved audio) alongside every step that was declined
+or failed. When that list is empty it says so.
+
+### Audio
+
+`alsa-ucm-conf` is unconditional; `sof-firmware` is the part that depends on the
+machine, and it is decided the same way. The signal is whether a `snd_sof*`
+driver is **bound** to any multimedia-class PCI device (`0x04*`, which includes
+`0x0480` where the AMD Audio Coprocessor lives) — not whether the module is
+loaded. On the target laptop ten `snd_sof_amd_*` modules are loaded, none is
+bound, sound runs through `snd_hda_intel` and `sof-firmware` is not installed;
+"is the module loaded" would get exactly that machine wrong.
+
+| state | result |
+|---|---|
+| a `snd_sof*` driver is bound | `sof-firmware` installed — the DSP needs it |
+| no SOF bound, ALSA has a card | nothing installed — sound already works |
+| audio hardware, no driver, no card | **reported, not guessed** — goes in the TODO list |
+| no audio hardware | nothing |
+
+The third row is deliberately not automatic. `sof-firmware` on its own does not
+make SOF audio work — it changes which driver binds on the *next* boot, and a
+card that enumerates but stays silent is harder to debug than no card at all.
+`--audio sof|hda|none` overrides the detection.
+
+This preserves the original reasoning rather than dropping it: installing SOF
+firmware on the target laptop could make the kernel bind `snd_sof_amd_renoir` to
+the coprocessor at `04:00.5` and move audio onto a path that does not work,
+breaking working sound rather than fixing anything. Machines where the legacy
+path works keep it; DSP-only machines (Intel Tiger Lake and later, AMD
+Rembrandt and later), which have no sound at all without the firmware, get it.
+
+`PKGS` is 62 packages plus whatever the hardware step decides — two on the
+target laptop (`amd-ucode`, `vulkan-radeon`), three on a machine that needs
+`sof-firmware`. A handful of them are additive and not actually installed on the
+target laptop today: `amd-ucode`, `power-profiles-daemon`, `wlr-randr`,
+`telegram-desktop`.
 
 ## Workspaces
 

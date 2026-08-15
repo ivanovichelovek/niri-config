@@ -29,6 +29,7 @@ USER_NAME=""        # empty: ask, defaulting to $SUDO_USER
 # paths on a machine that has neither.
 CPU_VENDOR=""       # empty: detect. amd | intel | none
 GPU_VENDORS=""      # empty: detect. comma-separated: amd,intel,nvidia,none
+AUDIO_PATH=""       # empty: detect. sof | hda | none
 # The image set lives in its own repository, not in a branch here: `git clone`
 # fetches every branch, so images on a branch next to the config would have
 # ridden along with every clone anyway.
@@ -54,6 +55,7 @@ Options:
   --cpu <vendor>     microcode: amd | intel | none (default: detect)
   --gpu <vendors>    GPU userspace: amd | intel | nvidia | none, comma-separated
                      for a hybrid machine (default: detect)
+  --audio <path>     sof (install sof-firmware) | hda | none (default: detect)
   -h, --help         this text
 
 A --skip-* flag wins over the prompt: that step is never offered.
@@ -71,6 +73,7 @@ while [[ $# -gt 0 ]]; do
         --user)         USER_NAME=${2:?--user needs a value}; shift 2 ;;
         --cpu)          CPU_VENDOR=${2:?--cpu needs a value}; shift 2 ;;
         --gpu)          GPU_VENDORS=${2:?--gpu needs a value}; shift 2 ;;
+        --audio)        AUDIO_PATH=${2:?--audio needs a value}; shift 2 ;;
         -h|--help)      usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage; exit 1 ;;
     esac
@@ -86,6 +89,11 @@ esac
 case ${CPU_VENDOR:-detect} in
     detect|amd|intel|none) ;;
     *) echo "unknown --cpu: $CPU_VENDOR (amd|intel|none)" >&2; exit 1 ;;
+esac
+
+case ${AUDIO_PATH:-detect} in
+    detect|sof|hda|none) ;;
+    *) echo "unknown --audio: $AUDIO_PATH (sof|hda|none)" >&2; exit 1 ;;
 esac
 
 if [[ -n $GPU_VENDORS ]]; then
@@ -147,6 +155,18 @@ step()  { printf '\n\033[1;34m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
 info()  { printf '    %s\n' "$*"; }
 warn()  { printf '\033[1;33m  ! %s\033[0m\n' "$*"; }
 as_user() { sudo -u "$USER_NAME" HOME="$USER_HOME" "$@"; }
+
+# "none", or what kind of VM this is.
+#
+# Not $(systemd-detect-virt || echo none): on bare metal the command prints
+# "none" AND exits 1, so the fallback fires too and the substitution comes out
+# as "none\nnone" — which is not equal to "none" and reads as "this is a VM".
+# That is how the greeter used to end up on software rendering on real hardware.
+detect_virt() {
+    local v
+    v=$(systemd-detect-virt 2>/dev/null) || true
+    echo "${v:-none}"
+}
 
 # Announce a step and ask whether to run it. Returns 0 to proceed.
 #
@@ -247,6 +267,47 @@ detect_gpu_vendors() {
     echo "${found[*]-}"
 }
 
+# Which path the sound hardware is actually on, which decides one package:
+# sof-firmware. It used to be hardcoded absent, with a comment explaining that
+# on this laptop sound runs through snd_hda_intel and installing SOF firmware
+# could make the kernel bind snd_sof_amd_renoir instead and move audio onto a
+# path that does not work — breaking working sound rather than fixing anything.
+# That reasoning is right, and it is also specific to machines where the legacy
+# path works. Modern Intel laptops (Tiger Lake and later) and AMD Rembrandt or
+# newer are DSP-only: without sof-firmware they have no sound at all.
+#
+#   sof      a snd_sof driver is BOUND to the audio hardware -> firmware needed
+#   hda      no SOF driver bound and ALSA already has a card -> leave it alone
+#   unknown  audio hardware, no driver bound, no card -> reported, not guessed
+#   none     no audio hardware at all (a VM)
+#
+# Bound, not merely loaded: this very laptop has ten snd_sof_amd_* modules
+# loaded and sound working through snd_hda_intel with no sof-firmware
+# installed, so "is the module loaded" would get exactly this machine wrong.
+detect_audio_path() {
+    local dev class drv sof=0 have_audio=0
+    for dev in /sys/bus/pci/devices/*/; do
+        [[ -r $dev/class ]] || continue
+        class=$(<"$dev/class")
+        # 0x0401 multimedia audio, 0x0403 audio device, 0x0480 "other
+        # multimedia" — which is where the AMD Audio Coprocessor lives.
+        [[ $class == 0x04* ]] || continue
+        have_audio=1
+        # -L, not readlink -f: `readlink -f` canonicalises a path that does not
+        # exist and happily returns …/driver for a device with nothing bound.
+        [[ -L $dev/driver ]] || continue
+        drv=$(basename "$(readlink "$dev/driver")")
+        [[ $drv == snd_sof* ]] && sof=1
+    done
+    if   (( sof )); then echo sof
+    # A leading-digit line is a card. Matching the text ALSA prints when there
+    # are none ("--- no soundcards ---") would be the fragile way round.
+    elif grep -qE '^ *[0-9]+ \[' /proc/asound/cards 2>/dev/null; then echo hda
+    elif (( have_audio )); then echo unknown
+    else echo none
+    fi
+}
+
 step "Hardware"
 [[ -n $CPU_VENDOR ]] || CPU_VENDOR=$(detect_cpu_vendor)
 if [[ -n $GPU_VENDORS ]]; then
@@ -265,12 +326,20 @@ esac
 
 # Microcode is NOT part of `base`. Without it the CPU runs on the errata that
 # shipped in its silicon.
+#
+# Each branch also leaves a one-line CPU_SUMMARY / GPU_SUMMARY / AUDIO_SUMMARY
+# for the report at the end: the whole point of detecting hardware is that the
+# user no longer knows from reading the script what they got, so the run has to
+# tell them — and name what it decided NOT to do.
 HW_PKGS=()
 if [[ -n $UCODE_PKG ]]; then
     info "CPU: $CPU_VENDOR -> $UCODE_PKG"
     HW_PKGS+=("$UCODE_PKG")
+    CPU_SUMMARY="$CPU_VENDOR -> $UCODE_PKG"
 else
     warn "unknown CPU vendor — no microcode package; pass --cpu amd|intel to force one"
+    CPU_SUMMARY="unknown vendor — no microcode installed"
+    TODO+=("work out your CPU vendor and install its microcode: pacman -S amd-ucode | intel-ucode, then regenerate the boot config")
 fi
 
 # A base install has no GPU userspace at all. mesa is unconditional (it carries
@@ -280,20 +349,63 @@ fi
 # NVIDIA is deliberately absent here — it is a DKMS kernel module, not just
 # userspace, and gets its own step further down.
 WANT_NVIDIA=0
+GPU_PARTS=()
 for _v in ${GPU_LIST[@]+"${GPU_LIST[@]}"}; do
     case $_v in
-        amd)    info "GPU: AMD -> vulkan-radeon";   HW_PKGS+=(vulkan-radeon) ;;
-        intel)  info "GPU: Intel -> vulkan-intel";  HW_PKGS+=(vulkan-intel) ;;
-        nvidia) info "GPU: NVIDIA -> asked about separately below"; WANT_NVIDIA=1 ;;
+        amd)    info "GPU: AMD -> vulkan-radeon"
+                HW_PKGS+=(vulkan-radeon); GPU_PARTS+=("AMD -> vulkan-radeon") ;;
+        intel)  info "GPU: Intel -> vulkan-intel"
+                HW_PKGS+=(vulkan-intel);  GPU_PARTS+=("Intel -> vulkan-intel") ;;
+        nvidia) info "GPU: NVIDIA -> asked about separately below"
+                WANT_NVIDIA=1 ;;
         none)   ;;
     esac
 done
-if (( ! ${#HW_PKGS[@]} )) || [[ " ${HW_PKGS[*]} " != *vulkan-* ]]; then
+if (( ${#GPU_PARTS[@]} )); then
+    GPU_SUMMARY=$(IFS=';'; echo "${GPU_PARTS[*]}")
+else
+    GPU_SUMMARY="none detected — mesa software rendering"
     if (( ! WANT_NVIDIA )); then
         warn "no AMD/Intel/NVIDIA GPU found — mesa's software renderer only"
         warn "on a VM that is expected; on real hardware pass --gpu amd|intel|nvidia"
+        # Only worth a TODO on real hardware: in a VM this is the right answer.
+        if [[ $(detect_virt) == none ]]; then
+            TODO+=("no GPU driver was installed — identify your GPU and re-run with --gpu amd|intel|nvidia")
+        fi
     fi
 fi
+
+# Audio. alsa-ucm-conf is unconditional and lives in PKGS below; the only
+# decision here is sof-firmware, and only two of the four outcomes decide it.
+[[ -n $AUDIO_PATH ]] || AUDIO_PATH=$(detect_audio_path)
+AUDIO_SUMMARY=""
+case $AUDIO_PATH in
+    sof)
+        info "Audio: a SOF driver is bound -> sof-firmware"
+        HW_PKGS+=(sof-firmware)
+        AUDIO_SUMMARY="SOF path -> sof-firmware"
+        ;;
+    hda)
+        info "Audio: legacy HDA path, ALSA already has a card -> no sof-firmware"
+        info "  installing it could move audio onto the SOF path and break what works"
+        AUDIO_SUMMARY="HDA path, works -> sof-firmware deliberately not installed"
+        ;;
+    unknown)
+        # Deliberately not installed for you. sof-firmware alone does not make
+        # SOF audio work — it changes which driver binds on the NEXT boot, and
+        # a card that enumerates but stays silent is harder to debug than no
+        # card at all. So this is reported and left as a decision.
+        warn "Audio: hardware present but no sound card and no driver bound"
+        warn "  sof-firmware is the usual fix — not installed, since it can only"
+        warn "  be judged after a reboot. Re-run with --audio sof to take it."
+        TODO+=("no sound card is registered: try 'pacman -S sof-firmware' and reboot (or re-run with --audio sof)")
+        AUDIO_SUMMARY="no card detected — see 'Still to do'"
+        ;;
+    none)
+        info "Audio: no audio hardware found"
+        AUDIO_SUMMARY="no audio hardware"
+        ;;
+esac
 
 # ─── packages from the official repos ───────────────────────────────────────
 PKGS=(
@@ -301,12 +413,8 @@ PKGS=(
     # Microcode and the Vulkan driver, both chosen by the step above.
     ${HW_PKGS[@]+"${HW_PKGS[@]}"}
     mesa
-    # Audio. alsa-ucm-conf only, deliberately NOT sof-firmware: on this laptop
-    # sound runs through snd_hda_intel and the Audio Coprocessor at 04:00.5 has
-    # no driver bound at all. Installing sof-firmware can make the kernel bind
-    # snd_sof_amd_renoir to it and move audio onto the SOF path, which is a way
-    # to break working sound rather than fix anything. Install it only if the
-    # internal mic or speakers turn out to be dead.
+    # Audio. UCM profiles are wanted on every machine; sof-firmware is the part
+    # that depends on the hardware, and the step above has already decided it.
     alsa-ucm-conf
     # Ethernet (Realtek RTL8111, r8169), Wi-Fi (RTL8822CE, rtw88) and the
     # RTL8822CE bluetooth radio are all in-kernel; their firmware comes from
@@ -430,6 +538,7 @@ fi
 # egl-wayland is what lets Wayland compositors talk to the NVIDIA stack.
 # nvidia_drm.modeset=1 is default-on in current packages, so the kernel cmdline
 # is left alone.
+NVIDIA_SUMMARY=""
 if (( WANT_NVIDIA )); then
     step "NVIDIA GPU detected"
     info "nvidia-open-dkms + egl-wayland — Turing (RTX 20xx) and newer only"
@@ -450,12 +559,16 @@ if (( WANT_NVIDIA )); then
         fi
         if pacman -S --needed --noconfirm linux-headers nvidia-open-dkms egl-wayland; then
             info "installed — if the card is pre-Turing, swap in nvidia-dkms"
+            NVIDIA_SUMMARY="nvidia-open-dkms + egl-wayland (Turing+ only)"
+            TODO+=("confirm your NVIDIA card is Turing (RTX 20xx) or newer — if it is older, replace nvidia-open-dkms with nvidia-dkms")
         else
             warn "the NVIDIA driver failed to install"
+            NVIDIA_SUMMARY="install FAILED"
             TODO+=("install the NVIDIA driver: pacman -S linux-headers nvidia-open-dkms egl-wayland")
         fi
     else
         warn "skipped — niri will fall back to software rendering on this GPU"
+        NVIDIA_SUMMARY="declined — no driver installed"
         TODO+=("install an NVIDIA driver: pacman -S linux-headers nvidia-open-dkms egl-wayland (Turing+) or nvidia-dkms (older)")
     fi
 fi
@@ -1032,7 +1145,7 @@ EOF
     # a buffer for scanout with modifiers: cage dies with "Failed to get buffer
     # handle for plane 0: Invalid argument" and greetd restarts it forever.
     # Software rendering costs nothing on a login screen.
-    VIRT=$(systemd-detect-virt 2>/dev/null || echo none)
+    VIRT=$(detect_virt)
     if [[ $VIRT != none && $GREETER != tuigreet ]]; then
         install -d -m 0755 /etc/systemd/system/greetd.service.d
         cat >/etc/systemd/system/greetd.service.d/10-virtual-gpu.conf <<'EOF'
@@ -1081,6 +1194,14 @@ cat <<EOF
   shell:         $( ((DID_CHANGE_SHELL)) && echo "fish" || echo "$CURRENT_SHELL — unchanged")
   greeter:       $([[ $SKIP_GREETER == 1 ]] && echo "none" || echo "$GREETER")
 
+  Hardware — what was detected and what it got:
+    CPU     $CPU_SUMMARY
+    GPU     $GPU_SUMMARY${NVIDIA_SUMMARY:+
+    NVIDIA  $NVIDIA_SUMMARY}
+    audio   $AUDIO_SUMMARY
+
+  Override any of that by re-running with --cpu, --gpu or --audio.
+
   Workspaces and their apps (see config.d/90-user-extra.kdl):
     term   kitty
     web    zen, google-chrome
@@ -1092,9 +1213,11 @@ cat <<EOF
 EOF
 
 if [[ ${#TODO[@]} -gt 0 ]]; then
-    printf '\033[1;33m  Still to do:\033[0m\n'
+    printf '\033[1;33m  Still to do by hand — nothing below was done for you:\033[0m\n'
     for t in "${TODO[@]}"; do printf '    - %s\n' "$t"; done
     echo
+else
+    printf '  Nothing left to do by hand.\n\n'
 fi
 
 cat <<'EOF'
