@@ -537,11 +537,42 @@ that are not installed.
 
 ## Hardware
 
-The driver list in `bootstrap.sh` targets a Ryzen 7 5800U laptop: `amd-ucode`
-(microcode is *not* part of `base`), `mesa` + `vulkan-radeon` for the integrated
-Vega, `alsa-ucm-conf` for audio. Ethernet (RTL8111), Wi-Fi (RTL8822CE) and its
-bluetooth radio are in-kernel and covered by `linux-firmware`. GRUB is
-regenerated after install so the microcode image is actually loaded.
+The two vendor-specific packages — CPU microcode and the Vulkan driver — are
+detected at install time, so the same script works on AMD, Intel and NVIDIA.
+`bootstrap.sh` reads the CPU vendor from `/proc/cpuinfo` and walks
+`/sys/bus/pci/devices/*/{class,vendor}` for display controllers (sysfs rather
+than `lspci`, which needs `pciutils` — not part of `base`):
+
+| detected | installed |
+|---|---|
+| AuthenticAMD | `amd-ucode` |
+| GenuineIntel | `intel-ucode` |
+| AMD GPU (`0x1002`) | `vulkan-radeon` |
+| Intel GPU (`0x8086`) | `vulkan-intel` |
+| NVIDIA GPU (`0x10de`) | `nvidia-open-dkms` + `egl-wayland`, in a step that always asks |
+
+`mesa` is unconditional. Display class is matched on the `0x03` prefix, not on
+`0x030000`, so the discrete half of an Optimus pair (`0x030200`, "3D
+controller") is found too and a hybrid laptop gets both userspaces. Microcode is
+*not* part of `base`, and GRUB is regenerated after install so the image is
+actually loaded.
+
+NVIDIA is the one driver that is never installed unasked: it is a DKMS kernel
+module, and `nvidia-open-dkms` supports Turing (RTX 20xx) and newer only — on
+Maxwell or Pascal it builds and then fails to drive the card, which needs
+`nvidia-dkms` instead. Unattended runs (`--yes`, or no tty) skip it and leave a
+TODO.
+
+`--cpu amd|intel|none` and `--gpu amd|intel|nvidia|none` (comma-separated for a
+hybrid machine) override detection — and are how the Intel and NVIDIA paths get
+exercised on a machine that has neither.
+
+The rest of the list is still written for the machine this config comes from, a
+Ryzen 7 5800U laptop with integrated Radeon Vega: `alsa-ucm-conf` for audio,
+nothing for networking because Ethernet (RTL8111), Wi-Fi (RTL8822CE) and its
+bluetooth radio are in-kernel and covered by `linux-firmware`. Note that Intel
+graphics get no VA-API from `mesa` alone — add `intel-media-driver` (Gen8+) if
+you want hardware video decode.
 
 `sof-firmware` is deliberately absent. On this machine sound runs through
 `snd_hda_intel`, and the Audio Coprocessor at `04:00.5` has no driver bound;
@@ -553,9 +584,6 @@ actually dead.
 today. The five that are not: `amd-ucode`, `power-profiles-daemon`,
 `wlr-randr`, `telegram-desktop` — all additive — and `sof-firmware`, now
 removed.
-
-On other hardware, edit the block at the top of `PKGS`: `vulkan-intel` for Intel,
-`nvidia-open-dkms` + `egl-wayland` for NVIDIA.
 
 ## Workspaces
 

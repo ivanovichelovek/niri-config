@@ -24,6 +24,11 @@ SKIP_WALLPAPERS=0
 ASSUME_YES=0        # 1: never ask, do every step (set by --yes or "yes for all")
 GREETER="regreet"   # regreet | noctalia | tuigreet | none
 USER_NAME=""        # empty: ask, defaulting to $SUDO_USER
+# Drivers. Empty means detect from the hardware (see "hardware" below); the
+# flags exist to override a wrong guess — and to exercise the Intel and NVIDIA
+# paths on a machine that has neither.
+CPU_VENDOR=""       # empty: detect. amd | intel | none
+GPU_VENDORS=""      # empty: detect. comma-separated: amd,intel,nvidia,none
 # The image set lives in its own repository, not in a branch here: `git clone`
 # fetches every branch, so images on a branch next to the config would have
 # ridden along with every clone anyway.
@@ -38,12 +43,17 @@ answer them in one go. Answering no to a step skips it and moves on.
 
 Options:
   -y, --yes          don't ask anything, run every step (for unattended runs)
+                     the NVIDIA driver is the one exception: it always asks,
+                     and is skipped with a TODO when there is no tty
   --skip-aur         official repos only (no yay, no chrome/noctalia/…)
   --skip-greeter     don't install or enable a display manager
   --skip-link        install packages only, don't touch ~/.config
   --skip-wallpapers  don't fetch the wallpaper set
   --greeter <name>   regreet (default) | noctalia | tuigreet | none
   --user <name>      install for this user (default: ask, offering $SUDO_USER)
+  --cpu <vendor>     microcode: amd | intel | none (default: detect)
+  --gpu <vendors>    GPU userspace: amd | intel | nvidia | none, comma-separated
+                     for a hybrid machine (default: detect)
   -h, --help         this text
 
 A --skip-* flag wins over the prompt: that step is never offered.
@@ -59,6 +69,8 @@ while [[ $# -gt 0 ]]; do
         -y|--yes)       ASSUME_YES=1; shift ;;
         --greeter)      GREETER=${2:?--greeter needs a value}; shift 2 ;;
         --user)         USER_NAME=${2:?--user needs a value}; shift 2 ;;
+        --cpu)          CPU_VENDOR=${2:?--cpu needs a value}; shift 2 ;;
+        --gpu)          GPU_VENDORS=${2:?--gpu needs a value}; shift 2 ;;
         -h|--help)      usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage; exit 1 ;;
     esac
@@ -70,6 +82,21 @@ case $GREETER in
     regreet|noctalia|tuigreet|none) ;;
     *) echo "unknown greeter: $GREETER (regreet|noctalia|tuigreet|none)" >&2; exit 1 ;;
 esac
+
+case ${CPU_VENDOR:-detect} in
+    detect|amd|intel|none) ;;
+    *) echo "unknown --cpu: $CPU_VENDOR (amd|intel|none)" >&2; exit 1 ;;
+esac
+
+if [[ -n $GPU_VENDORS ]]; then
+    IFS=, read -ra _gpu_check <<<"$GPU_VENDORS"
+    for _g in "${_gpu_check[@]}"; do
+        case $_g in
+            amd|intel|nvidia|none) ;;
+            *) echo "unknown --gpu: $_g (amd|intel|nvidia|none)" >&2; exit 1 ;;
+        esac
+    done
+fi
 
 # ─── preconditions ──────────────────────────────────────────────────────────
 [[ $EUID -eq 0 ]] || { echo "run this with sudo: sudo $0" >&2; exit 1; }
@@ -174,17 +201,106 @@ if [[ $USER_NAME != "$SUDO_USER" ]]; then
     warn "the AUR step will ask for $USER_NAME's password"
 fi
 
+# ─── hardware: microcode and GPU userspace ──────────────────────────────────
+# This config was written on a Ryzen 7 5800U with integrated Radeon Vega, and
+# the driver packages used to be hardcoded for it — an Intel or NVIDIA machine
+# got AMD microcode it cannot use and no Vulkan driver for the GPU it has, which
+# leaves niri with nothing but a software renderer. So the two vendor-specific
+# things are detected here instead. --cpu / --gpu override the result.
+#
+# Detection reads sysfs directly rather than calling lspci: pciutils is not part
+# of `base`, and the header above promises this script needs no more than base.
+
+detect_cpu_vendor() {
+    case $({ grep -m1 '^vendor_id' /proc/cpuinfo || true; } | cut -d: -f2 | tr -d ' \t') in
+        AuthenticAMD) echo amd ;;
+        GenuineIntel) echo intel ;;
+        *)            echo none ;;
+    esac
+}
+
+# Every display controller on the PCI bus, deduplicated to a vendor list. Class
+# is matched on the 0x03 prefix, not on 0x030000: a laptop dGPU in an Optimus
+# pair reports 0x030200 ("3D controller"), and matching only VGA would miss the
+# discrete card on exactly the hybrid machines this is for.
+detect_gpu_vendors() {
+    local dev class vendor found=() v
+    for dev in /sys/bus/pci/devices/*/; do
+        [[ -r $dev/class && -r $dev/vendor ]] || continue
+        class=$(<"$dev/class")
+        [[ $class == 0x03* ]] || continue
+        vendor=$(<"$dev/vendor")
+        case $vendor in
+            0x1002) v=amd ;;            # AMD/ATI
+            0x8086) v=intel ;;
+            0x10de) v=nvidia ;;
+            # Everything else is a virtual or management adapter (VMware 0x15ad,
+            # QEMU 0x1234, virtio 0x1af4, Cirrus 0x1013, ASPEED BMC 0x1a03).
+            # Those run on mesa's software path and need no vendor driver.
+            *) continue ;;
+        esac
+        [[ " ${found[*]-} " == *" $v "* ]] || found+=("$v")
+    done
+    # Unconditionally, and never a non-zero status: a machine with no GPU this
+    # knows about is a normal outcome (a VM), not a failure, and returning 1
+    # under `set -e` would kill the script there.
+    echo "${found[*]-}"
+}
+
+step "Hardware"
+[[ -n $CPU_VENDOR ]] || CPU_VENDOR=$(detect_cpu_vendor)
+if [[ -n $GPU_VENDORS ]]; then
+    read -ra GPU_LIST <<<"${GPU_VENDORS//,/ }"
+else
+    read -ra GPU_LIST <<<"$(detect_gpu_vendors)"
+fi
+
+# The microcode package is referenced again by the GRUB step below, which is
+# what actually makes it load, so keep the name rather than only the vendor.
+UCODE_PKG=""
+case $CPU_VENDOR in
+    amd)   UCODE_PKG=amd-ucode ;;
+    intel) UCODE_PKG=intel-ucode ;;
+esac
+
+# Microcode is NOT part of `base`. Without it the CPU runs on the errata that
+# shipped in its silicon.
+HW_PKGS=()
+if [[ -n $UCODE_PKG ]]; then
+    info "CPU: $CPU_VENDOR -> $UCODE_PKG"
+    HW_PKGS+=("$UCODE_PKG")
+else
+    warn "unknown CPU vendor — no microcode package; pass --cpu amd|intel to force one"
+fi
+
+# A base install has no GPU userspace at all. mesa is unconditional (it carries
+# the OpenGL drivers for all three vendors and the software fallback); the
+# Vulkan driver is per-vendor, and niri needs one to render on the GPU.
+#
+# NVIDIA is deliberately absent here — it is a DKMS kernel module, not just
+# userspace, and gets its own step further down.
+WANT_NVIDIA=0
+for _v in ${GPU_LIST[@]+"${GPU_LIST[@]}"}; do
+    case $_v in
+        amd)    info "GPU: AMD -> vulkan-radeon";   HW_PKGS+=(vulkan-radeon) ;;
+        intel)  info "GPU: Intel -> vulkan-intel";  HW_PKGS+=(vulkan-intel) ;;
+        nvidia) info "GPU: NVIDIA -> asked about separately below"; WANT_NVIDIA=1 ;;
+        none)   ;;
+    esac
+done
+if (( ! ${#HW_PKGS[@]} )) || [[ " ${HW_PKGS[*]} " != *vulkan-* ]]; then
+    if (( ! WANT_NVIDIA )); then
+        warn "no AMD/Intel/NVIDIA GPU found — mesa's software renderer only"
+        warn "on a VM that is expected; on real hardware pass --gpu amd|intel|nvidia"
+    fi
+fi
+
 # ─── packages from the official repos ───────────────────────────────────────
 PKGS=(
-    # ── drivers / firmware for this machine ─────────────────────────────────
-    # Ryzen 7 5800U (Cezanne). Microcode is NOT part of base — without it the
-    # CPU runs on shipped-in-silicon errata. GRUB is regenerated below so the
-    # microcode image is actually loaded.
-    amd-ucode
-    # GPU: integrated Radeon Vega (amdgpu). A base install has no GPU userspace.
-    # On Intel swap vulkan-radeon -> vulkan-intel; on NVIDIA use
-    # nvidia-open-dkms + egl-wayland instead.
-    mesa vulkan-radeon
+    # ── drivers / firmware ──────────────────────────────────────────────────
+    # Microcode and the Vulkan driver, both chosen by the step above.
+    ${HW_PKGS[@]+"${HW_PKGS[@]}"}
+    mesa
     # Audio. alsa-ucm-conf only, deliberately NOT sof-firmware: on this laptop
     # sound runs through snd_hda_intel and the Audio Coprocessor at 04:00.5 has
     # no driver bound at all. Installing sof-firmware can make the kernel bind
@@ -278,21 +394,70 @@ if step_ask "Official packages (${#PKGS[@]} from the repos)"; then
         TODO+=("re-run the package install: pacman -Syu --needed ${PKGS[*]}")
     fi
 
-    # amd-ucode only takes effect once it is referenced from the boot entry.
-    if command -v grub-mkconfig >/dev/null && [[ -d /boot/grub ]]; then
-        step "Regenerating GRUB config (picks up amd-ucode)"
+    # Microcode only takes effect once it is referenced from the boot entry.
+    # grub-mkconfig finds either vendor's image on its own, so the only
+    # vendor-specific thing here is what the messages name.
+    if [[ -z $UCODE_PKG ]]; then
+        :
+    elif command -v grub-mkconfig >/dev/null && [[ -d /boot/grub ]]; then
+        step "Regenerating GRUB config (picks up $UCODE_PKG)"
         if ! grub-mkconfig -o /boot/grub/grub.cfg; then
             warn "grub-mkconfig failed — the boot config was left as it was"
             TODO+=("regenerate the boot config: grub-mkconfig -o /boot/grub/grub.cfg")
         fi
     else
         warn "GRUB not found — microcode will not load until your bootloader references it"
-        TODO+=("add the amd-ucode initrd to your boot entry")
+        TODO+=("add the $UCODE_PKG initrd to your boot entry")
     fi
 else
     warn "skipped — niri, kitty, fish and the rest are NOT installed"
     warn "the steps below assume these packages; expect them to fall short"
     TODO+=("install the base packages: pacman -S --needed ${PKGS[*]}")
+fi
+
+# ─── NVIDIA ─────────────────────────────────────────────────────────────────
+# Its own step, and one that always asks even under --yes-for-all, because it is
+# the only driver here that is a kernel module rather than userspace, and the
+# only one that can leave the machine without a working session:
+#
+#   - nvidia-open-dkms supports Turing (RTX 20xx) and newer ONLY. On Maxwell or
+#     Pascal it builds happily and then does not drive the card; those need
+#     nvidia-dkms, which this script will not choose for you.
+#   - DKMS needs linux-headers matching the running kernel. The header of this
+#     script assumes them, but a base install that skipped them would produce a
+#     module that never builds.
+#
+# egl-wayland is what lets Wayland compositors talk to the NVIDIA stack.
+# nvidia_drm.modeset=1 is default-on in current packages, so the kernel cmdline
+# is left alone.
+if (( WANT_NVIDIA )); then
+    step "NVIDIA GPU detected"
+    info "nvidia-open-dkms + egl-wayland — Turing (RTX 20xx) and newer only"
+    info "older cards (Maxwell/Pascal) need nvidia-dkms instead"
+
+    NVIDIA_OK=0
+    if [[ -t 0 ]]; then
+        read -rp "    install nvidia-open-dkms? [y/N] " _nv
+        case ${_nv,,} in y|yes) NVIDIA_OK=1 ;; esac
+    else
+        warn "not interactive — not installing an NVIDIA driver unasked"
+    fi
+
+    if (( NVIDIA_OK )); then
+        if ! pacman -Qq linux-headers >/dev/null 2>&1; then
+            warn "linux-headers is not installed — DKMS cannot build the module"
+            info "installing it along with the driver"
+        fi
+        if pacman -S --needed --noconfirm linux-headers nvidia-open-dkms egl-wayland; then
+            info "installed — if the card is pre-Turing, swap in nvidia-dkms"
+        else
+            warn "the NVIDIA driver failed to install"
+            TODO+=("install the NVIDIA driver: pacman -S linux-headers nvidia-open-dkms egl-wayland")
+        fi
+    else
+        warn "skipped — niri will fall back to software rendering on this GPU"
+        TODO+=("install an NVIDIA driver: pacman -S linux-headers nvidia-open-dkms egl-wayland (Turing+) or nvidia-dkms (older)")
+    fi
 fi
 
 # ─── AUR ────────────────────────────────────────────────────────────────────
