@@ -308,6 +308,94 @@ detect_audio_path() {
     fi
 }
 
+# ── the internal panel, for the output scale ────────────────────────────────
+# Nothing in this repo sets `scale`, so niri uses 1. That is right for the
+# 1920x1200 panel this config was written on (141 dpi) and wrong for the 3:2
+# HiDPI panels that ship in current laptops — a MateBook X Pro is 3000x2000 at
+# 259 dpi, where scale 1 renders everything at about half the intended size.
+#
+# Echoes "<connector> <pixels_wide> <pixels_high> <mm_wide>", or nothing.
+detect_panel() {
+    local dir conn mode px_w px_h mm_w
+    for dir in /sys/class/drm/*/; do
+        conn=$(basename "$dir")
+        # card1-eDP-1 -> eDP-1. Internal panels only: an external monitor's
+        # correct scale depends on how far away it is, which sysfs cannot say.
+        conn=${conn#*-}
+        case $conn in eDP*|LVDS*|DSI*) ;; *) continue ;; esac
+        [[ -r $dir/status && $(<"$dir/status") == connected ]] || continue
+
+        # First line of `modes` is the preferred mode, which for a laptop panel
+        # is its native resolution.
+        mode=$({ head -1 "$dir/modes" 2>/dev/null || true; })
+        [[ $mode =~ ^([0-9]+)x([0-9]+) ]] || continue
+        px_w=${BASH_REMATCH[1]}; px_h=${BASH_REMATCH[2]}
+
+        mm_w=$(edid_width_mm "$dir/edid") || continue
+        (( mm_w > 0 )) || continue
+
+        echo "$conn $px_w $px_h $mm_w"
+        return 0
+    done
+    return 0
+}
+
+# Physical width in mm from an EDID blob. Prefers the first detailed timing
+# descriptor, which carries mm; falls back to bytes 21/22, which are whole
+# centimetres and so up to ~3% out.
+#
+# sysfs reports these files as zero-length, so `[[ -s ]]` is not a usable test —
+# read the bytes and count them instead.
+edid_width_mm() {
+    local file=$1 bytes mm_w
+    [[ -r $file ]] || return 1
+    # Unquoted on purpose: od prints eight lines, and word splitting on IFS is
+    # what flattens them into one array. `read -ra` would take the first line
+    # only — sixteen bytes, sixteen short of even reaching the size fields.
+    # -v matters too: without it od folds the EDID's long runs of equal bytes
+    # into a "*" and every offset after the first run comes out wrong.
+    # shellcheck disable=SC2207
+    bytes=( $(od -An -v -tu1 -N 128 "$file" 2>/dev/null) )
+    (( ${#bytes[@]} >= 72 )) || return 1
+    # Byte 0 of a valid EDID is 0x00 and bytes 1-7 are 0xFF.
+    (( bytes[0] == 0 && bytes[1] == 255 )) || return 1
+
+    # Bytes 54-55 are the descriptor's pixel clock; zero means this is a text
+    # descriptor rather than a detailed timing, and has no size in it.
+    if (( bytes[54] != 0 || bytes[55] != 0 )); then
+        # 66 = low 8 bits of width, high nibble of 68 = its top 4 bits.
+        mm_w=$(( ((bytes[68] >> 4) << 8) | bytes[66] ))
+        (( mm_w > 0 )) && { echo "$mm_w"; return 0; }
+    fi
+    (( bytes[21] > 0 )) && { echo $(( bytes[21] * 10 )); return 0; }
+    return 1
+}
+
+# Pixels + physical width -> the scale to write, in quarters (niri takes
+# fractional scales, and quarters are the granularity people actually use).
+#
+# The divisor is a target of ~130 logical dpi rather than the nominal 96: at 96
+# every mainstream laptop panel would be scaled up, including the 141 dpi one
+# this config runs on, where 1 is correct. Checked against real panels —
+# 141 dpi -> 1, 162 -> 1.25, 185 -> 1.5, 210 -> 1.5, 259 -> 2.
+panel_scale_quarters() {
+    local px_w=$1 mm_w=$2 dpi q
+    dpi=$(( (px_w * 254 + mm_w * 5) / (mm_w * 10) ))
+    q=$(( (dpi * 4 + 65) / 130 ))
+    (( q < 4 ))  && q=4
+    (( q > 12 )) && q=12
+    echo "$q $dpi"
+}
+
+# 4 -> "1", 5 -> "1.25", 8 -> "2" … KDL wants a bare number, not "1.50".
+quarters_to_scale() {
+    case $1 in
+        4) echo 1 ;;    5) echo 1.25 ;;  6) echo 1.5 ;;   7) echo 1.75 ;;
+        8) echo 2 ;;    9) echo 2.25 ;; 10) echo 2.5 ;;  11) echo 2.75 ;;
+        *) echo 3 ;;
+    esac
+}
+
 step "Hardware"
 [[ -n $CPU_VENDOR ]] || CPU_VENDOR=$(detect_cpu_vendor)
 if [[ -n $GPU_VENDORS ]]; then
@@ -406,6 +494,31 @@ case $AUDIO_PATH in
         AUDIO_SUMMARY="no audio hardware"
         ;;
 esac
+
+# The internal panel. Only the numbers are worked out here; the file is written
+# in the config step below, which is the one that may be skipped with
+# --skip-link and the one that already owns config.d.
+PANEL_CONN=""; PANEL_SCALE=""; PANEL_LOGICAL_W=""
+PANEL_PX_W=""; PANEL_PX_H=""; PANEL_MM_W=""; PANEL_DPI=""
+# `|| true` is load-bearing: with no internal panel detect_panel prints nothing,
+# read hits EOF and returns 1, and `set -e` would end the whole install right
+# here — on exactly the machines with nothing to configure (desktops, VMs).
+read -r PANEL_CONN PANEL_PX_W PANEL_PX_H PANEL_MM_W < <(detect_panel) || true
+if [[ -n $PANEL_CONN ]]; then
+    read -r _q PANEL_DPI < <(panel_scale_quarters "$PANEL_PX_W" "$PANEL_MM_W")
+    PANEL_SCALE=$(quarters_to_scale "$_q")
+    PANEL_LOGICAL_W=$(( PANEL_PX_W * 4 / _q ))
+    if (( _q > 4 )); then
+        info "Panel: $PANEL_CONN ${PANEL_PX_W}x${PANEL_PX_H}, ${PANEL_DPI} dpi -> scale $PANEL_SCALE"
+        PANEL_SUMMARY="$PANEL_CONN ${PANEL_PX_W}x${PANEL_PX_H} @ ${PANEL_DPI}dpi -> scale $PANEL_SCALE"
+    else
+        info "Panel: $PANEL_CONN ${PANEL_PX_W}x${PANEL_PX_H}, ${PANEL_DPI} dpi -> scale 1, nothing to write"
+        PANEL_SUMMARY="$PANEL_CONN ${PANEL_PX_W}x${PANEL_PX_H} @ ${PANEL_DPI}dpi -> scale 1 (default)"
+    fi
+else
+    info "Panel: no internal display found — leaving the scale alone"
+    PANEL_SUMMARY="no internal panel — scale left at 1"
+fi
 
 # ─── packages from the official repos ───────────────────────────────────────
 PKGS=(
@@ -860,6 +973,53 @@ else
             info "99-local.kdl created from the example (gitignored)"
         fi
 
+        # Per-machine output config, same deal — and a separate file from
+        # 99-local.kdl for a reason that is not cosmetic. niri keeps output
+        # blocks in a list and looks them up with .iter().find(), so for a given
+        # connector the FIRST block wins, which is the opposite of binds and
+        # environment, where the last one does. 99-local.kdl is included last so
+        # it can override those; an output block there would lose to the one in
+        # 90-user-extra.kdl and be silently ignored. Hence a file included
+        # first. (Checked against niri-config/src/output.rs for niri 26.04.)
+        LOCAL_OUT=$REPO_ROOT/config.d/05-local-output.kdl
+        if [[ -f $LOCAL_OUT ]]; then
+            info "05-local-output.kdl already present — left alone"
+        elif [[ -n $PANEL_SCALE && $PANEL_SCALE != 1 ]]; then
+            # position is repeated here because the first block wins whole: this
+            # one shadows the eDP block in 90-user-extra.kdl rather than adding
+            # to it, so anything that block sets has to be restated.
+            as_user tee "$LOCAL_OUT" >/dev/null <<EOF
+// ─────────────────────────────────────────────────────────────────────────────
+// 05 — Output config for this machine  (generated, gitignored)
+// ─────────────────────────────────────────────────────────────────────────────
+// Written by install/bootstrap.sh from the panel's EDID:
+//   $PANEL_CONN — ${PANEL_PX_W}x${PANEL_PX_H} across ${PANEL_MM_W} mm = ${PANEL_DPI} dpi
+//
+// Included FIRST, not last: niri resolves an output by the first block that
+// names it, so this has to come before 90-user-extra.kdl to win. That also
+// means it replaces that block outright — position is restated below.
+//
+// Edit freely; bootstrap.sh will not touch this file once it exists.
+// ─────────────────────────────────────────────────────────────────────────────
+
+output "$PANEL_CONN" {
+    scale $PANEL_SCALE
+    position x=0 y=0
+}
+EOF
+            info "05-local-output.kdl written — $PANEL_CONN at scale $PANEL_SCALE"
+            # 90-user-extra.kdl puts DP-1 at x=1920, which only butts up against
+            # the internal panel if that panel is 1920 logical px wide.
+            if [[ -n $PANEL_LOGICAL_W && $PANEL_LOGICAL_W != 1920 ]]; then
+                warn "external monitor positions assume a 1920-wide internal panel;"
+                warn "this one is $PANEL_LOGICAL_W logical px at scale $PANEL_SCALE"
+                TODO+=("if you use an external monitor, fix its position: config.d/90-user-extra.kdl puts DP-1 at x=1920 but $PANEL_CONN is $PANEL_LOGICAL_W logical px wide")
+            fi
+        else
+            as_user cp "$REPO_ROOT/config.d/05-local-output.kdl.example" "$LOCAL_OUT"
+            info "05-local-output.kdl created empty (scale 1 is right for this panel)"
+        fi
+
         if command -v niri >/dev/null; then
             if as_user niri validate -c "$REPO_ROOT/config.kdl" >/dev/null 2>&1; then
                 info "niri validate: config is valid"
@@ -1199,8 +1359,10 @@ cat <<EOF
     GPU     $GPU_SUMMARY${NVIDIA_SUMMARY:+
     NVIDIA  $NVIDIA_SUMMARY}
     audio   $AUDIO_SUMMARY
+    panel   $PANEL_SUMMARY
 
   Override any of that by re-running with --cpu, --gpu or --audio.
+  The panel scale lives in config.d/05-local-output.kdl — edit it freely.
 
   Workspaces and their apps (see config.d/90-user-extra.kdl):
     term   kitty

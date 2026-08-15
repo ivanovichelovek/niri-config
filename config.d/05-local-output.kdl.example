@@ -1,0 +1,45 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// 05 — Output config for this machine  (per-machine, NOT tracked by git)
+// ─────────────────────────────────────────────────────────────────────────────
+// Copy this file to `05-local-output.kdl` next to it; that name is gitignored.
+// install/bootstrap.sh does the copy for you, and fills in a `scale` when the
+// laptop panel needs one — see below.
+//
+// Why this file exists separately from 99-local.kdl
+// ─────────────────────────────────────────────────
+// niri keeps output blocks in a list and resolves a connector with
+// `.iter().find()`, so for any given output name the FIRST matching block wins.
+// That is the opposite of binds and environment variables, where the last
+// definition wins — which is what 99-local.kdl relies on by being included
+// last. An `output` block in 99-local.kdl would lose to the one in
+// 90-user-extra.kdl and be ignored without any error. So output overrides live
+// here, in a file included FIRST. (niri 26.04, niri-config/src/output.rs.)
+//
+// The same rule means a block here REPLACES the matching one in
+// 90-user-extra.kdl rather than merging with it: restate everything you want,
+// including `position`.
+//
+// Scale
+// ─────
+// Nothing in the tracked config sets `scale`, so niri uses 1. That suits a
+// ~140 dpi panel and is much too small on the HiDPI 3:2 panels in current
+// laptops. bootstrap.sh works the dpi out of the panel's EDID and writes a
+// scale here when one is wanted; roughly, it targets ~130 logical dpi:
+//
+//   141 dpi (1920x1200, 14")   -> 1
+//   182 dpi (2160x1440, 14")   -> 1.5
+//   259 dpi (3000x2000, 13.9") -> 2
+//
+// Example:
+//
+//   output "eDP-1" {
+//       scale 1.5
+//       position x=0 y=0
+//   }
+//
+//   // An external monitor to the right of a 2160-px panel at scale 1.5,
+//   // i.e. 1440 logical px — this is what 90-user-extra.kdl assumes is 1920.
+//   output "DP-1" {
+//       position x=1440 y=0
+//   }
+// ─────────────────────────────────────────────────────────────────────────────

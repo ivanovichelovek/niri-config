@@ -143,6 +143,25 @@ binds {
 `bootstrap.sh` creates it from `99-local.kdl.example`, and a manual clone should
 `cp config.d/99-local.kdl.example config.d/99-local.kdl` before running niri.
 
+**`output` blocks are the exception, and they go in a different file.** niri
+keeps outputs in a list and resolves a connector with `.iter().find()`, so for a
+given name the **first** block wins — the opposite of binds and environment.
+An `output` block in `99-local.kdl` loses to the one in `90-user-extra.kdl` and
+is ignored with no error at all. So per-machine output config lives in
+`config.d/05-local-output.kdl`, gitignored the same way and included **first**:
+
+```kdl
+output "eDP-1" {
+    scale 1.5
+    position x=0 y=0
+}
+```
+
+Because the first block wins whole rather than merging, that block *replaces*
+the one in `90-user-extra.kdl` — restate anything it set, `position` included.
+This file has the same missing-include trap and the same fix:
+`cp config.d/05-local-output.kdl.example config.d/05-local-output.kdl`.
+
 The file manager the repo ships is **Dolphin**, and it is the only one used —
 the Qt theming under `dots/qt/` exists to back it. It needs `XDG_MENU_PREFIX`
 set (see `40-environment.kdl`), without which it opens nothing at all. Its own
@@ -571,6 +590,35 @@ Nothing is installed for networking: on the target laptop Ethernet (RTL8111),
 Wi-Fi (RTL8822CE) and its bluetooth radio are in-kernel and covered by
 `linux-firmware`. Note that Intel graphics get no VA-API from `mesa` alone — add
 `intel-media-driver` (Gen8+) if you want hardware video decode.
+
+### Panel scale
+
+Nothing in the tracked config sets `scale`, so niri uses 1. That is right for
+the 1920x1200 / 141 dpi panel this config runs on and much too small on the
+HiDPI 3:2 panels in current laptops — a MateBook X Pro is 3000x2000 at 259 dpi.
+
+`bootstrap.sh` reads the internal panel's native mode from
+`/sys/class/drm/*/modes` and its physical width from the EDID (the first
+detailed timing descriptor, which carries millimetres; falling back to bytes
+21/22, which are whole centimetres), works out the dpi, and rounds to a quarter
+scale against a target of ~130 logical dpi:
+
+| panel | dpi | scale |
+|---|---|---|
+| 1920x1200, 14" | 141 | 1 |
+| 1920x1200, 13.3" | 162 | 1.25 |
+| 2160x1440, 14" | 182 | 1.5 |
+| 2880x1800, 14" | 243 | 1.75 |
+| 3000x2000, 13.9" | 259 | 2 |
+
+The target is ~130 rather than the nominal 96 because at 96 every mainstream
+laptop panel gets scaled up, including the 141 dpi one where 1 is correct. Only
+internal panels (`eDP*`, `LVDS*`, `DSI*`) are considered — the right scale for
+an external monitor depends on how far away it is, which sysfs cannot say.
+
+The result is written to `config.d/05-local-output.kdl` (see [Local
+overrides](#local-overrides) for why that file exists separately). At scale 1
+the file is created empty; an existing file is never overwritten.
 
 ### What the run tells you at the end
 

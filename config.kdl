@@ -51,6 +51,14 @@ xwayland-satellite {
 screenshot-path "~/Pictures/Screenshots/Screenshot from %Y-%m-%d %H-%M-%S.png"
 
 // ── Modular includes ────────────────────────────────────────────────────────
+// Per-machine output config, gitignored. FIRST on purpose, and the one thing
+// that must not move to the bottom next to 99-local.kdl: niri resolves an
+// output by the first block that names it, so a `scale` for the laptop panel
+// only takes effect if it is seen before 90-user-extra.kdl. bootstrap.sh
+// creates this from 05-local-output.kdl.example, working the scale out of the
+// panel's EDID; create it by hand after a manual clone, as `include` errors out
+// when the file is missing.
+include "config.d/05-local-output.kdl"
 include "config.d/10-input-and-cursor.kdl"
 include "config.d/20-layout-and-overview.kdl"
 include "config.d/30-window-rules.kdl"

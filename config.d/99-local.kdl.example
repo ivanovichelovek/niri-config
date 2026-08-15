@@ -9,6 +9,12 @@
 // definition wins — so anything here overrides the rest of config.d/ without
 // editing tracked files. Verified on niri 26.04.
 //
+// `output` blocks do NOT work that way and do not belong here: niri resolves an
+// output with .iter().find(), so the FIRST block naming a connector wins, and
+// one written here would lose to 90-user-extra.kdl silently. Put those in
+// config.d/05-local-output.kdl, which is included first for exactly this
+// reason.
+//
 // `include` fails hard on a missing file, which is why the empty copy exists at
 // all rather than being created only when you want an override.
 //
