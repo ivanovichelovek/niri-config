@@ -62,9 +62,11 @@ Zen is the one that does not come from a package. See
 [Zen Browser](#zen-browser) below.
 
 All helper scripts live in `bin/` and are symlinked into `~/.local/bin`:
-`lock-and-suspend`, `niri-pin-window`, `niri-toggle-gaps`, `random-wallpaper`,
+`lock-and-suspend`, `niri-pin-window`, `niri-toggle-gaps`,
 `noctalia-telegram-theme` and `wlsunset-restart` (called by
-`lock-and-suspend`). `claude-state` lives there too but is run by hand — see
+`lock-and-suspend`). The two with a window and a launcher entry —
+`random-wallpaper` and `bookshelf` — go to `/usr/bin` instead, because a
+`.desktop` entry is launched with whatever PATH the launcher has. `claude-state` lives there too but is run by hand — see
 [Moving to a new machine](#moving-to-a-new-machine).
 
 `unar-here` and `fix-legacy-names` are reached from Dolphin's right-click menu
@@ -287,6 +289,113 @@ it moved behind OAuth — so Wallhaven replaced it.
 
 `tests/test-random-wallpaper.py` asserts the non-destructive properties and
 the filter logic against a throwaway `$HOME` — 37 checks, needs network.
+
+## Bookshelf
+
+`bin/bookshelf` — `Ctrl+Alt+B`, or "Bookshelf" in the launcher;
+`Ctrl+Alt+Shift+B` opens it straight on the picker. A reading desk for books
+Claude recommends: four tabs, not one page.
+
+| tab | what is on it |
+|---|---|
+| Полка | the open recommendations as cover cards; click one to open it |
+| Оценки | everything you have rated, sorted or searched |
+| Подбор | a free-text wish, the model, and the button that asks for more |
+| Профили | several readers on one machine, each with their own shelf |
+
+The book window carries the cover, the catalogue's rating, why it was
+recommended, the annotation, a 1–10 strip for your own mark and a box for what
+you thought. A mark is written to disk the moment you click it — closing the
+window with `Esc` cannot lose it.
+
+**Nothing is sent anywhere.** Ratings and impressions live in
+`~/.local/share/bookshelf/profiles/<name>.json`, one file per reader, plain
+enough to read with `cat`. Covers are cached next to them.
+
+New recommendations shell out to the `claude` CLI, so they run on the
+subscription already logged in on this machine — no API key, no token budget.
+The call is deliberately lean (`--strict-mcp-config` with an empty MCP set,
+`--setting-sources ''`, slash commands off), because otherwise every press
+would re-upload the whole MCP and skills preamble.
+
+Claude is asked for **only** a title, an author and a language. Everything a
+card states as fact — cover, annotation, year, public rating — is looked up
+here, against FantLab for Russian and Open Library for English. A title that
+neither catalogue confirms is drawn "не подтверждено" and says so in the book
+window, rather than passing for a real book; the model does invent plausible
+series, and a recommender that hides that is worse than none.
+
+Four catalogues are asked in turn, and they fill each other's gaps: the first
+one to confirm the book decides its identity, the rest only contribute a cover
+or a blurb it was missing. FantLab and Open Library come first, then the two
+places the misses actually live — **Royal Road** for English progression
+fantasy, which is serialised there before it is published, and
+**Author.Today** for the Russian боярка and ЛитРПГ FantLab never indexed.
+**Google Books** is last and opt-in: this IP is refused without an API key, so
+it is only used when a key is entered in Профили. A card says where a borrowed
+blurb came from, next to the "аннотация" heading.
+
+Royal Road authors write under pen names ("nobody103" is Domagoj Kurmaić), so
+an author check is impossible there and a loose title match cheerfully returns
+somebody else's «Mage Errant» — only exact titles are accepted from it.
+Author.Today does list real names, so title *and* author are matched.
+
+**Not every image filed as a cover is one.** A printed cover is a tall
+rectangle, roughly 0.6–0.7 wide to tall; Open Library also holds reader
+photographs and square audiobook tiles. Anything outside 0.55–0.80, or too
+small, or not decodable, is refused and the next candidate is tried — that is
+why every lookup returns a list of covers rather than one. If they all fail,
+"Своя обложка" in the book window takes a file from disk, and a hand-picked
+cover is never second-guessed.
+
+Two more wrinkles. FantLab hangs covers off *editions*, and an edition belongs
+to a novel — so a cycle and a single short story both have none of their own,
+and both the cover and the blurb are borrowed from the cycle they sit in
+(`?children=1` lists what stands under it), labelled as such. Open Library
+files a series under the title of its first volume — "Cradle" is shelved as
+"Unsouled" — so a miss there is often a naming difference, and the book window
+lists what the author does have in the catalogue instead of silently adopting
+one of those. Whatever a catalogue calls the book, the shelf keeps the name it
+was recommended under; theirs is shown as "в каталоге: …".
+
+A cycle's card lists the books under it the way FantLab does — number, title,
+year, the catalogue's average and **your own mark** against each volume, so the
+weak book in a run is visible instead of averaged away. One request carries the
+whole list. The mark is a picker, not a label: rating a volume there adds it
+to the shelf as its own book, because that is where "the third one dragged" has
+to live to be worth anything later.
+
+When nothing confirms a title, whatever the catalogue *does* have by that
+author is offered underneath with a "Взять обложку" button rather than adopted
+silently: "Mage Errant" is filed as "Into the Labyrinth", but "An Inheritance
+of Magic" would otherwise pick up the cover of a different Jacka series. One
+click, and the borrowed cover is labelled with the name it came from.
+
+**Every launch catches up, cheaply.** First the marks list, which is one
+request and reports both new books and marks you changed. Then everything still
+missing a card is retried — but not more often than `RETRY_AFTER_HOURS` (24),
+so a title that exists nowhere does not cost four requests each time the window
+opens. Then `STALE_PER_LAUNCH` (25) of the oldest entries are revalidated,
+which for a cover means a conditional request carrying the stored `ETag`: the
+usual answer is `304 Not Modified` with no body at all, and only a cover that
+actually changed is downloaded again. Two hundred books drift through over a
+fortnight instead of arriving as one stall at startup.
+
+Long jobs — the picker, the FantLab import, the startup refresh — report into
+the title bar with a count and a progress bar, visible from whichever tab you
+are on.
+
+A FantLab user id in Профили pulls that account's marks in as already-read
+books, which is what makes a fresh profile useful immediately: 182 of them
+here, in two pages.
+
+Same GTK4-without-libadwaita build as `random-wallpaper`, with the same
+stylesheet registered above `PRIORITY_USER`. Icon:
+`share/icons/hicolor/scalable/apps/dev.ivanc.Bookshelf.svg`.
+
+`tests/test-bookshelf.py` covers the store, the catalogue rules and every
+control in the window — 125 checks, needs a display and network.
+
 
 ## fish
 
