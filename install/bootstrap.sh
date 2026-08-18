@@ -556,8 +556,10 @@ PKGS=(
     # noctalia runtime deps that live in the official repos
     # (imagemagick also resizes the wallpaper in bin/noctalia-telegram-theme)
     imagemagick brightnessctl ffmpeg wlr-randr python libqalculate
-    # bin/random-wallpaper is a GTK4 app (no libadwaita — it ships its own
-    # theme); it talks to both wallpaper APIs with stdlib urllib.
+    # bin/random-wallpaper and bin/bookshelf are GTK4 apps (no libadwaita —
+    # they ship their own theme); both talk to their APIs with stdlib urllib.
+    # bookshelf additionally shells out to the `claude` CLI, which bootstrap
+    # does not install: it wants a logged-in subscription, not a package.
     python-gobject gtk4 librsvg
     # apps. Dolphin is the file manager (Super+E in 70-binds.kdl); ark, okular
     # and imv are what it hands archives, documents and images to. The
@@ -867,18 +869,20 @@ else
         done
         info "helper scripts linked into ~/.local/bin"
 
-        # random-wallpaper goes system-wide instead. It is the one helper with a
-        # .desktop entry, and a desktop entry is launched by whatever PATH the
-        # launcher happens to have — which is not the shell's. /usr/bin is on
-        # every PATH there is, so the entry can name an absolute path that does
-        # not depend on $HOME either.
+        # random-wallpaper and bookshelf go system-wide instead. They are the
+        # helpers with a .desktop entry, and a desktop entry is launched by
+        # whatever PATH the launcher happens to have — which is not the shell's.
+        # /usr/bin is on every PATH there is, so the entry can name an absolute
+        # path that does not depend on $HOME either.
         #
         # A symlink rather than a copy, to match the rest of bin/: edits to the
         # repo are live, with no reinstall step. It does mean /usr/bin holds a
         # root-owned link into $USER_HOME, so it dangles if the repo moves —
         # rerunning this step fixes that.
-        ln -sfn "$REPO_ROOT/bin/random-wallpaper" /usr/bin/random-wallpaper
-        info "/usr/bin/random-wallpaper -> $REPO_ROOT/bin/random-wallpaper"
+        for app in random-wallpaper bookshelf; do
+            ln -sfn "$REPO_ROOT/bin/$app" "/usr/bin/$app"
+            info "/usr/bin/$app -> $REPO_ROOT/bin/$app"
+        done
 
         # Dolphin right-click actions. These are what unar-here and
         # fix-legacy-names are reached through, so they follow the scripts.

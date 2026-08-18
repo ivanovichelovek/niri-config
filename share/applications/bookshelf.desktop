@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Bookshelf
+Comment=Books Claude recommends, with your own ratings and impressions
+Exec=/usr/bin/bookshelf
+Icon=dev.ivanc.Bookshelf
+Terminal=false
+Categories=Office;Literature;
+StartupWMClass=dev.ivanc.Bookshelf
+Keywords=books;reading;recommendations;fantlab;книги;
+Actions=Discover;
+
+[Desktop Action Discover]
+Name=New recommendations
+Exec=/usr/bin/bookshelf --discover

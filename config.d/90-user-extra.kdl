@@ -100,6 +100,12 @@ binds {
     // Saves to ~/random_wallpaper only when you press Save; Delete throws the
     // download away. Also in the launcher as "Random Wallpaper".
     Ctrl+Alt+W repeat=false hotkey-overlay-title="Random wallpaper" { spawn "/usr/bin/random-wallpaper"; }
+
+    // The reading desk: what Claude has recommended, with your own marks.
+    // Ctrl+Alt+Shift+B opens it straight on the picker instead of the shelf.
+    // Also in the launcher as "Bookshelf".
+    Ctrl+Alt+B repeat=false hotkey-overlay-title="Bookshelf" { spawn "/usr/bin/bookshelf"; }
+    Ctrl+Alt+Shift+B repeat=false hotkey-overlay-title="Bookshelf — new recommendations" { spawn "/usr/bin/bookshelf" "--discover"; }
 }
 
 // The random wallpaper previewer is a dialog, not a workspace app.
