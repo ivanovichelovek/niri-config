@@ -1919,8 +1919,9 @@ class Bookshelf(Gtk.ApplicationWindow):
             ["В подборке", "Читаю", "Отложено", "Все книги"])
         self.shelf_filter.connect("notify::selected", lambda *_: self.refresh())
         bar.append(self.shelf_filter)
-        self.enrich_btn = button("Обновить обложки", lambda _b: self._enrich_shelf(), tooltip=
-                                 "Дозагрузить обложки и аннотации для книг без карточки")
+        self.enrich_btn = button("Обновить информацию", lambda _b: self._enrich_shelf(), tooltip=
+                                 "Поискать заново обложки, аннотации и рейтинги для книг, "
+                                 "у которых их нет")
         bar.append(self.enrich_btn)
         page.append(bar)
 
@@ -2299,23 +2300,95 @@ class Bookshelf(Gtk.ApplicationWindow):
         return False
 
     def enrich_pending(self, only_untried):
-        """Books still missing a catalogue card: either never resolved at all,
-        or imported from a marks list, which carries no cover for cycles and no
-        annotation for anything. On launch we only look at the ones nobody has
-        tried yet, so a title that genuinely does not exist is not re-queried on
-        every start."""
+        """Books still missing something — a card, a cover, a blurb.
+
+        `only_untried` is for the automatic pass at startup, where a title that
+        exists nowhere should not be re-queried on every launch. Pressing the
+        button is the opposite case: the reader is explicitly asking for
+        another go, so every gap is retried, whatever happened last time.
+        """
         out = []
         for book in self.profile.books:
             if book.get("status") == "skipped":
                 continue
+            if book.get("verified") and book.get("cover_url") and book.get("annotation"):
+                continue
             if only_untried and book.get("enrich_tried"):
                 continue
-            if not book.get("verified"):
-                out.append(book)
-            elif (book.get("fantlab_work_id") and not book.get("enrich_tried")
-                  and not (book.get("cover_url") and book.get("annotation"))):
-                out.append(book)
+            out.append(book)
         return out
+
+    def _enrich_one(self, book):
+        """Everything one book still needs, from whichever catalogue has it."""
+        key = self.profile.data.get("google_books_key", "")
+        if book.get("verified") and book.get("fantlab_work_id"):
+            for field, value in fantlab_fill(book["fantlab_work_id"],
+                                             book.get("author", "")).items():
+                if value and not book.get(field):
+                    book[field] = value
+        if not book.get("verified") or not book.get("cover_url") or not book.get("annotation"):
+            facts = resolve(book.get("title", ""), book.get("author", ""),
+                            book.get("lang", "ru"), key)
+            if book.get("verified"):
+                # Identity is already settled; take only what is still blank.
+                for field in ("cover_url", "cover_candidates", "annotation", "annotation_from"):
+                    book[field] = book.get(field) or facts.get(field)
+            else:
+                book.update(catalogued(book, facts))
+        book["enrich_tried"] = True
+        book["checked_at"] = time.strftime("%Y-%m-%d %H:%M")
+        cover_path(book)
+        if not book.get("cover_url"):
+            # Whether a picture is usable is only known once it is downloaded,
+            # so this is the place to ask what else the author has: an omnibus
+            # filed with a reader's photograph leaves the book confirmed and
+            # coverless, and the window can then offer the separate volumes.
+            book["neighbours"] = openlibrary_neighbours(book.get("title", ""),
+                                                        book.get("author", ""))
+        return book
+
+    def _refresh_on_launch(self):
+        """Catch up cheaply at startup: pull new marks, fill what is missing,
+        then revalidate a few old entries with conditional requests that
+        usually download nothing at all."""
+        missing, stale = self.refresh_plan()
+        user_id = self.profile.data.get("fantlab_user_id", "")
+        if not missing and not stale and not user_id:
+            return False
+        total = len(missing) + len(stale)
+        self._log("Обновление: %d без карточки, %d на проверку" % (len(missing), len(stale)))
+        self.busy("проверяю изменения", 0, total)
+
+        def work():
+            if user_id:
+                GLib.idle_add(self.busy, "FantLab: новые оценки", 0, total)
+                added, changed = sync_fantlab_marks(self.profile, user_id)
+                if added or changed:
+                    GLib.idle_add(self._log, "FantLab: новых книг %d, оценок изменилось %d"
+                                  % (added, changed))
+                    GLib.idle_add(self.save_and_refresh)
+
+            done = 0
+            for book in missing:
+                GLib.idle_add(self.busy, book.get("title", "")[:40], done, total)
+                self._enrich_one(book)
+                done += 1
+                if done % 10 == 0:
+                    GLib.idle_add(self.save_and_refresh)
+
+            fresh = 0
+            for book in stale:
+                GLib.idle_add(self.busy, book.get("title", "")[:40], done, total)
+                if refresh_cover(book):
+                    fresh += 1
+                book["checked_at"] = time.strftime("%Y-%m-%d %H:%M")
+                done += 1
+            GLib.idle_add(self._log, "Обновление закончено, обложек обновилось: %d" % fresh)
+            GLib.idle_add(self.save_and_refresh)
+            GLib.idle_add(self.busy)
+
+        threading.Thread(target=work, daemon=True).start()
+        return False
 
     def _enrich_shelf(self, only_untried=False):
         pending = self.enrich_pending(only_untried)
@@ -2323,8 +2396,8 @@ class Bookshelf(Gtk.ApplicationWindow):
             if not only_untried:
                 self._log("Все книги на полке уже подтверждены.")
             return
-        self._log("Дозагружаю карточки: %d книг…" % len(pending))
-        self.busy("обложки и аннотации", 0, len(pending))
+        self._log("Обновляю информацию: %d книг…" % len(pending))
+        self.busy("ищу данные о книгах", 0, len(pending))
         self.enrich_btn.set_sensitive(False)
 
         def work():

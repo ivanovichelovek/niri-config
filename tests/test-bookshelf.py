@@ -475,7 +475,7 @@ def widget_checks(app):
     sheet3._rate_child(volume, None)
     check("and it can be cleared", added[0]["my_rating"] is None)
 
-    # Обновить обложки — an unresolved book must come back with a card
+    # Обновить информацию — an unresolved book must come back with a card
     raw = win.profile.add({"title": "Без карточки", "author": "Кто-то", "lang": "ru",
                            "why": "—", "verified": False})
     win.profile.save()
@@ -485,7 +485,7 @@ def widget_checks(app):
         while GLib.MainContext.default().pending():
             GLib.MainContext.default().iteration(False)
         time.sleep(0.05)
-    check("Обновить обложки resolves a pending book", raw.get("verified") is True)
+    check("Обновить информацию resolves a pending book", raw.get("verified") is True)
     check("and marks it so it is not re-queried", raw.get("enrich_tried") is True)
 
     # Открыть карточку — the link out to the catalogue
