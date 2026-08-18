@@ -1,0 +1,2469 @@
+#!/usr/bin/env python3
+"""Bookshelf — a reading desk for books Claude recommends.
+
+Four tabs instead of one page: the shelf of open recommendations, the record of
+what you have read and what you thought of it, the picker that asks Claude for
+more, and the profiles that let several people share one desk.
+
+Two rules the rest of the code follows from:
+
+  * Claude proposes only a title, an author and a reason. Everything a card
+    shows as fact — cover, annotation, year, public rating — is looked up here,
+    against FantLab (ru) and Open Library (en). A title that resolves nowhere
+    is drawn as "не подтверждено" instead of quietly passing for a real book,
+    because a recommender that invents plausible titles is worse than none.
+
+  * Ratings and impressions live in this house and nowhere else: one JSON file
+    per profile under ~/.local/share/bookshelf/profiles/, readable by a human
+    or by a future Claude session with a single open(). Nothing is ever sent
+    to FantLab or any other site.
+
+Generation shells out to the `claude` CLI, so it draws on the subscription
+already installed on this machine — no API key, no separate token budget.
+"""
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+gi.require_version("GdkPixbuf", "2.0")
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import threading
+import time
+import unicodedata
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from pathlib import Path
+
+from gi.repository import GdkPixbuf, Gdk, GLib, Gtk
+
+APP_ID = "dev.ivanc.Bookshelf"
+
+DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "bookshelf"
+PROFILE_DIR = DATA_DIR / "profiles"
+COVER_DIR = DATA_DIR / "covers"
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "bookshelf"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+
+# Seeds for the very first launch, written by earlier Claude sessions.
+LEGACY_LOG = Path.home() / "Books/recommendations-log.md"
+
+# FantLab rejects the default urllib agent, the same way Konachan does.
+USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+)
+TIMEOUT = 30
+
+COVER_W, COVER_H = 148, 216
+
+# Startup refresh budget. Books that never got a card are retried on every
+# launch, but not more often than RETRY_AFTER hours — a title that genuinely
+# does not exist anywhere should not cost four requests every time the window
+# opens. Books that do have a card are re-checked at most STALE_PER_LAUNCH at a
+# time and only once every STALE_AFTER days, so two hundred of them drift
+# through over a fortnight instead of arriving as one long stall at startup.
+RETRY_AFTER_HOURS = 24
+STALE_AFTER_DAYS = 21
+STALE_PER_LAUNCH = 25
+
+STATUSES = [
+    ("recommended", "В подборке"),
+    ("reading", "Читаю"),
+    ("read", "Прочитано"),
+    ("skipped", "Отложено"),
+]
+
+MODELS = [("Sonnet — быстрее", "sonnet"), ("Opus — точнее", "opus"), ("Haiku — дешевле", "haiku")]
+
+
+# ── plumbing ────────────────────────────────────────────────────────────────
+
+def http_bytes(url, timeout=TIMEOUT, etag="", modified=""):
+    """Fetch a URL. With an etag or a date, a server that says "not modified"
+    costs one round trip and no body — which is what makes re-checking two
+    hundred covers on every launch affordable.
+
+    Returns (data, etag, modified); data is None when nothing changed.
+    """
+    headers = {"User-Agent": USER_AGENT}
+    if etag:
+        headers["If-None-Match"] = etag
+    if modified:
+        headers["If-Modified-Since"] = modified
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read(), resp.headers.get("ETag", ""), resp.headers.get("Last-Modified", "")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 304:
+            return None, etag, modified
+        raise
+
+
+def fetch(url, timeout=TIMEOUT):
+    """Just the bytes, for callers with nothing cached to compare against."""
+    return http_bytes(url, timeout)[0]
+
+
+def http_json(url, timeout=TIMEOUT):
+    return json.loads(fetch(url, timeout).decode("utf-8", "replace"))
+
+
+def norm(text):
+    # NFC, never NFKD: decomposition splits "ё" and "й" into a letter plus a
+    # combining mark, the mark is then stripped as punctuation, and "тёмный"
+    # comes out as "те мныи" — two titles that differ only in ё would stop
+    # matching each other.
+    text = unicodedata.normalize("NFC", (text or "").lower()).replace("ё", "е")
+    return re.sub(r"[^0-9a-zа-я ]+", " ", text).strip()
+
+
+def surname(author):
+    """The longest word of a name — good enough to tell one author from another."""
+    words = [w for w in norm(author).split() if len(w) > 2]
+    return max(words, key=len) if words else ""
+
+
+def author_matches(wanted, got):
+    """Is this the same author? Every word of the shorter name has to appear in
+    the other. A surname alone is not enough: "Bierce" fits both John Bierce,
+    who wrote Mage Errant, and Ambrose Bierce, who died in 1914."""
+    mine = [w for w in norm(wanted).split() if len(w) > 2]
+    theirs = [w for w in norm(got).split() if len(w) > 2]
+    if not mine or not theirs:
+        return True
+    short, long = (mine, theirs) if len(mine) <= len(theirs) else (theirs, mine)
+    return all(word in long for word in short)
+
+
+def slugify(name):
+    base = re.sub(r"[^0-9a-zA-Zа-яА-Я]+", "-", name).strip("-").lower()
+    return base or "profile"
+
+
+# ── metadata lookup ─────────────────────────────────────────────────────────
+
+def fantlab_lookup(title, author):
+    """Resolve a title on FantLab. Returns a dict of facts, or None."""
+    url = "https://api.fantlab.ru/search-works?q=" + urllib.parse.quote(title) + "&page=1"
+    try:
+        matches = http_json(url).get("matches") or []
+    except Exception:
+        return None
+
+    want_author = surname(author)
+    want_title = norm(title)
+    scored = []
+    for m in matches:
+        names = " ".join(str(m.get(k) or "") for k in
+                         ("autor_rusname", "all_autor_rusname", "autor1_rusname", "autor2_rusname"))
+        if author and not any(author_matches(author, one) for one in names.split("  ") or [names]):
+            continue
+        got_title = norm(m.get("rusname") or m.get("fullname") or "")
+        if not (want_title in got_title or got_title in want_title):
+            continue
+        # A cycle is the better card when both exist: the user prefers series.
+        score = (2 if m.get("work_type_id") == 4 else 1, m.get("markcount") or 0)
+        scored.append((score, m))
+    if not scored:
+        return None
+    ranked = [m for _, m in sorted(scored, key=lambda pair: pair[0], reverse=True)]
+    best = ranked[0]
+
+    work_id = best.get("work_id")
+    try:
+        work = http_json("https://api.fantlab.ru/work/%d" % work_id)
+    except Exception:
+        work = {}
+
+    # A cycle carries the rating but never a cover — FantLab hangs covers off
+    # editions, and editions belong to the individual novels. Borrow the first
+    # one that has a picture, so the card is not a grey rectangle.
+    image = work.get("image") or work.get("image_preview") or ""
+    annotation = (work.get("work_description") or "").strip()
+    if not image or not annotation:
+        for other in ranked[1:4]:
+            try:
+                sibling = http_json("https://api.fantlab.ru/work/%d" % other["work_id"])
+            except Exception:
+                continue
+            image = image or sibling.get("image") or sibling.get("image_preview") or ""
+            annotation = annotation or (sibling.get("work_description") or "").strip()
+            if image and annotation:
+                break
+    return {
+        "verified": True,
+        "source": "fantlab",
+        "source_url": "https://fantlab.ru/work%d" % work_id,
+        "fantlab_work_id": work_id,
+        "title": work.get("work_name") or best.get("rusname") or title,
+        "author": work.get("work_lp") or best.get("autor_rusname") or author,
+        # work_type is the Russian word ("цикл"); work_type_name is "cycle".
+        "kind": work.get("work_type") or best.get("name_show_im") or "",
+        "year": work.get("work_year") or best.get("year") or None,
+        "annotation": annotation,
+        "public_rating": work.get("val_midmark") or (best.get("midmark") or [None])[0],
+        "public_votes": work.get("val_voters") or best.get("markcount"),
+        "cover_url": ("https://fantlab.ru" + image) if image.startswith("/") else image,
+    }
+
+
+OL_FIELDS = "title,author_name,cover_i,first_publish_year,key,ratings_average,ratings_count"
+
+
+def _ol_search(params):
+    url = "https://openlibrary.org/search.json?" + urllib.parse.urlencode(params) + \
+          "&limit=8&fields=" + OL_FIELDS
+    try:
+        return http_json(url).get("docs") or []
+    except Exception:
+        return []
+
+
+def openlibrary_lookup(title, author):
+    # Fielded search first: Open Library's free-text q is strict enough to
+    # return nothing at all for "Arcane Ascension Andrew Rowe".
+    docs = _ol_search({"title": title, "author": author}) if author else []
+    docs = docs or _ol_search({"q": "%s %s" % (title, author)})
+    # A fielded query with an apostrophe in it ("Bryce O'Connor") comes back
+    # empty even when the book is there, so ask by author alone before giving
+    # up. The title still has to match — this widens the net, not the rule.
+    docs = docs or (_ol_search({"author": author}) if author else [])
+    docs = docs or _ol_search({"title": title})
+    if not docs:
+        return None
+
+    want_author = surname(author)
+    want_title = norm(title)
+
+    def fits(d):
+        names = " ".join(d.get("author_name") or [])
+        got_title = norm(d.get("title") or "")
+        if author and not author_matches(author, names):
+            return False
+        # The title has to match too. Matching on the author alone quietly
+        # renames the recommendation to some other book of theirs, which is a
+        # worse failure than admitting the catalogue does not have this one.
+        return want_title in got_title or got_title in want_title
+
+    pool = [d for d in docs if fits(d)]
+    if not pool:
+        return None
+
+    def rank(d):
+        got_title = norm(d.get("title") or "")
+        # A series name is often not a book title — "Cradle" is a series whose
+        # first volume is "Unsouled". Prefer an exact title, then anything that
+        # is not openly labelled a later volume, then the earliest printing.
+        later_volume = bool(re.search(r"volume|book \d|\d", got_title))
+        return (got_title != want_title, later_volume, not d.get("cover_i"),
+                d.get("first_publish_year") or 9999, len(got_title))
+
+    ranked = sorted(pool, key=rank)
+    best = ranked[0]
+
+    def description(doc):
+        key = doc.get("key") or ""
+        if not key:
+            return ""
+        try:
+            desc = http_json("https://openlibrary.org%s.json" % key).get("description")
+        except Exception:
+            return ""
+        return ((desc.get("value") if isinstance(desc, dict) else desc) or "").strip()
+
+    # Editions of one book are separate records here, and only some carry the
+    # blurb or the cover; take them from whichever sibling has them.
+    key = best.get("key") or ""
+    annotation = description(best)
+    cover = best.get("cover_i")
+    spares = []
+    for other in ranked[1:4]:
+        if other.get("cover_i") and other.get("cover_i") != cover:
+            spares.append("https://covers.openlibrary.org/b/id/%d-L.jpg" % other["cover_i"])
+        if annotation and cover:
+            continue
+        cover = cover or other.get("cover_i")
+        annotation = annotation or description(other)
+    return {
+        "verified": True,
+        "source": "openlibrary",
+        "source_url": "https://openlibrary.org%s" % key,
+        "title": best.get("title") or title,
+        "author": ", ".join(best.get("author_name") or []) or author,
+        "kind": "",
+        "year": best.get("first_publish_year"),
+        "annotation": annotation.strip(),
+        "public_rating": best.get("ratings_average"),
+        "public_votes": best.get("ratings_count"),
+        "cover_url": ("https://covers.openlibrary.org/b/id/%d-L.jpg" % cover) if cover else "",
+        "cover_candidates": spares,
+    }
+
+
+_CYCLE_COVERS = {}
+
+
+def saga_id(work):
+    """The cycle a work belongs to. FantLab returns it as a bare id or a list."""
+    for key in ("work_saga", "work_root_saga"):
+        value = work.get(key)
+        if isinstance(value, list) and value:
+            value = value[0].get("work_id") if isinstance(value[0], dict) else value[0]
+        if isinstance(value, int) and value:
+            return value
+    return None
+
+
+def cycle_cover(cycle_id, author):
+    """The cover of the cycle a book sits in.
+
+    A single short story has no edition of its own — forty-six Holmes stories
+    share the covers of the collections — and neither does the cycle record.
+    So take the cycle's name and look it up the ordinary way, which lands on a
+    novel or collection under it that does have a picture. Cached per cycle,
+    because the whole point is that many books share one answer.
+    """
+    if cycle_id in _CYCLE_COVERS:
+        return _CYCLE_COVERS[cycle_id]
+    result = ("", "")
+    try:
+        # ?children=1 is what lists the works standing under a cycle; without
+        # it the cycle looks childless and there is nothing to borrow from.
+        cycle = http_json("https://api.fantlab.ru/work/%d?children=1" % int(cycle_id))
+    except Exception:
+        cycle = {}
+    name = cycle.get("work_name") or ""
+    image = cycle.get("image") or cycle.get("image_preview") or ""
+    if image:
+        result = ("https://fantlab.ru" + image if image.startswith("/") else image, name)
+    else:
+        # Novels and collections get printed as books and so have covers;
+        # single stories almost never do, so try those last.
+        children = cycle.get("children") or []
+        weight = {"роман": 0, "сборник": 1, "повесть": 2}
+        children.sort(key=lambda c: weight.get(c.get("work_type"), 9))
+        for child in children[:5]:
+            try:
+                sub = http_json("https://api.fantlab.ru/work/%d" % child["work_id"])
+            except Exception:
+                continue
+            child_image = sub.get("image") or sub.get("image_preview") or ""
+            if child_image:
+                result = ("https://fantlab.ru" + child_image
+                          if child_image.startswith("/") else child_image, name)
+                break
+    _CYCLE_COVERS[cycle_id] = result
+    return result
+
+
+_CYCLE_TEXTS = {}
+
+
+def cycle_annotation(cycle_id):
+    """The cycle's own description, or the first one under it that has any."""
+    if cycle_id in _CYCLE_TEXTS:
+        return _CYCLE_TEXTS[cycle_id]
+    result = ("", "")
+    try:
+        cycle = http_json("https://api.fantlab.ru/work/%d?children=1" % int(cycle_id))
+    except Exception:
+        cycle = {}
+    name = cycle.get("work_name") or ""
+    text = (cycle.get("work_description") or "").strip()
+    if not text:
+        children = cycle.get("children") or []
+        weight = {"роман": 0, "сборник": 1, "повесть": 2}
+        children.sort(key=lambda c: weight.get(c.get("work_type"), 9))
+        for child in children[:4]:
+            try:
+                sub = http_json("https://api.fantlab.ru/work/%d" % child["work_id"])
+            except Exception:
+                continue
+            text = (sub.get("work_description") or "").strip()
+            if text:
+                break
+    if text:
+        result = (text, name)
+    _CYCLE_TEXTS[cycle_id] = result
+    return result
+
+
+_CYCLE_BOOKS = {}
+
+
+def cycle_books(cycle_id):
+    """The works standing under a cycle, with their ratings.
+
+    One request carries the whole thing — name, year, average and vote count
+    for every book — so a cycle's card can show the run the way FantLab does,
+    with the weak volume visible instead of averaged away.
+    """
+    if cycle_id in _CYCLE_BOOKS:
+        return _CYCLE_BOOKS[cycle_id]
+    try:
+        children = http_json("https://api.fantlab.ru/work/%d?children=1"
+                             % int(cycle_id)).get("children") or []
+    except Exception:
+        children = []
+    books = [{
+        "work_id": child.get("work_id"),
+        "title": child.get("work_name") or "",
+        "kind": child.get("work_type") or "",
+        "year": child.get("work_year"),
+        "rating": float(child["val_midmark"]) if child.get("val_midmark") else None,
+        "votes": child.get("val_voters"),
+    } for child in children if child.get("work_name")]
+    _CYCLE_BOOKS[cycle_id] = books
+    return books
+
+
+def fantlab_fill(work_id, author=""):
+    """Fetch what a marks list leaves out: cover, annotation, public rating.
+
+    A cycle has no cover of its own — the editions belong to its novels — so
+    fall back to a child work, and past that to the cycle the book belongs to.
+    """
+    try:
+        work = http_json("https://api.fantlab.ru/work/%d" % int(work_id))
+    except Exception:
+        return {}
+
+    image = work.get("image") or work.get("image_preview") or ""
+    annotation = (work.get("work_description") or "").strip()
+    if not image:
+        for child in (work.get("children") or [])[:6]:
+            child_id = child.get("work_id") if isinstance(child, dict) else None
+            if not child_id:
+                continue
+            try:
+                sub = http_json("https://api.fantlab.ru/work/%d" % child_id)
+            except Exception:
+                continue
+            image = sub.get("image") or sub.get("image_preview") or ""
+            annotation = annotation or (sub.get("work_description") or "").strip()
+            if image:
+                break
+
+    filled = {
+        "annotation": annotation,
+        "kind": work.get("work_type") or "",
+        "year": work.get("work_year"),
+        "public_rating": work.get("val_midmark"),
+        "public_votes": work.get("val_voters"),
+        "cover_url": ("https://fantlab.ru" + image) if image.startswith("/") else image,
+    }
+    cycle = saga_id(work)
+    if not filled["annotation"] and cycle:
+        # A single story rarely carries a blurb of its own; the cycle's says
+        # what the reader actually needs to know, as long as it is labelled.
+        text, name = cycle_annotation(cycle)
+        if text:
+            filled["annotation"] = text
+            filled["annotation_from"] = "цикл «%s»" % name if name else "цикл"
+    if not filled["cover_url"]:
+        if cycle:
+            url, name = cycle_cover(cycle, author or work.get("work_lp") or "")
+            if url:
+                filled["cover_url"] = url
+                filled["cover_from"] = name
+        else:
+            # No parent to borrow from — this *is* the cycle. Look under itself.
+            url, _ = cycle_cover(int(work_id), author)
+            filled["cover_url"] = url
+    return filled
+
+
+def _html(url):
+    return fetch(url).decode("utf-8", "replace")
+
+
+def _meta(page, prop):
+    found = re.search(r'<meta property="%s" content="([^"]*)"' % prop, page)
+    return html_unescape(found.group(1)) if found else ""
+
+
+def html_unescape(text):
+    import html
+    return html.unescape(text or "").strip()
+
+
+def royalroad_lookup(title, author):
+    """Royal Road — where most English progression fantasy is first serialised.
+
+    Its authors write under pen names ("nobody103" is Domagoj Kurmaić), so the
+    author cannot be used to confirm a match, and a loose title match happily
+    returns somebody else's «Mage Errant». Hence exact titles only.
+    """
+    try:
+        results = _html("https://www.royalroad.com/fictions/search?title=" +
+                        urllib.parse.quote(title))
+    except Exception:
+        return None
+
+    want = norm(title)
+    for block in results.split("fiction-list-item")[1:8]:
+        link = re.search(r'href="(/fiction/\d+/[^"]+)"', block)
+        name = re.search(r'class="[^"]*font-red-sunglo[^"]*"[^>]*>([^<]+)<', block)
+        if not link or not name or norm(html_unescape(name.group(1))) != want:
+            continue
+        try:
+            page = _html("https://www.royalroad.com" + link.group(1))
+        except Exception:
+            return None
+        return {
+            "verified": True,
+            "source": "royalroad",
+            "source_url": "https://www.royalroad.com" + link.group(1),
+            "title": html_unescape(name.group(1)),
+            "author": author,
+            "kind": "веб-роман",
+            "year": None,
+            "annotation": _meta(page, "og:description"),
+            "public_rating": None,
+            "public_votes": None,
+            "cover_url": _meta(page, "og:image"),
+        }
+    return None
+
+
+def authortoday_lookup(title, author):
+    """Author.Today — where the Russian боярка and ЛитРПГ FantLab misses lives."""
+    try:
+        results = _html("https://author.today/search?q=" + urllib.parse.quote(title) +
+                        "&category=works")
+    except Exception:
+        return None
+
+    want_title, want_author = norm(title), surname(author)
+    for block in results.split('<div class="book-row')[1:8]:
+        link = re.search(r'href="(/work/\d+)"', block)
+        if not link:
+            continue
+        names = " ".join(re.findall(r'href="/u/[^"]+"[^>]*>([^<]+)<', block))
+        if author and not author_matches(author, names):
+            continue
+        try:
+            page = _html("https://author.today" + link.group(1))
+        except Exception:
+            continue
+        # og:title is "Название - Автор", which is the only place on the page
+        # where the author is reliably present — the search rows often omit it.
+        got, _, got_author = _meta(page, "og:title").partition(" - ")
+        if want_title not in norm(got) and norm(got) not in want_title:
+            continue
+        if author and got_author and not author_matches(author, got_author):
+            continue
+        return {
+            "verified": True,
+            "source": "authortoday",
+            "source_url": "https://author.today" + link.group(1),
+            "title": got or title,
+            "author": author,
+            "kind": "",
+            "year": None,
+            "annotation": _meta(page, "og:description"),
+            "public_rating": None,
+            "public_votes": None,
+            "cover_url": _meta(page, "og:image"),
+        }
+    return None
+
+
+def googlebooks_lookup(title, author, key=""):
+    """Google Books. Without a key this IP is refused outright, so it is opt-in:
+    the key goes in the Профили tab and is only used when it is there."""
+    if not key:
+        return None
+    query = "intitle:%s" % urllib.parse.quote(title)
+    if author:
+        query += "+inauthor:%s" % urllib.parse.quote(author)
+    try:
+        items = http_json("https://www.googleapis.com/books/v1/volumes?q=%s&maxResults=5&key=%s"
+                          % (query, urllib.parse.quote(key))).get("items") or []
+    except Exception:
+        return None
+
+    want_title, want_author = norm(title), surname(author)
+    for item in items:
+        info = item.get("volumeInfo") or {}
+        if author and not author_matches(author, " ".join(info.get("authors") or [])):
+            continue
+        got = norm(info.get("title") or "")
+        if want_title not in got and got not in want_title:
+            continue
+        image = (info.get("imageLinks") or {}).get("thumbnail", "")
+        return {
+            "verified": True,
+            "source": "googlebooks",
+            "source_url": info.get("infoLink") or "",
+            "title": info.get("title") or title,
+            "author": ", ".join(info.get("authors") or []) or author,
+            "kind": "",
+            "year": (info.get("publishedDate") or "")[:4] or None,
+            "annotation": info.get("description") or "",
+            "public_rating": info.get("averageRating"),
+            "public_votes": info.get("ratingsCount"),
+            "cover_url": image.replace("&edge=curl", "").replace("http://", "https://"),
+        }
+    return None
+
+
+def openlibrary_neighbours(title, author):
+    """What the catalogue does have by this author.
+
+    Open Library files a series under the title of its first volume — "Mage
+    Errant" is shelved as "Into the Labyrinth" — so a miss is often a naming
+    difference rather than an invented book. We show the neighbours and let the
+    reader judge, instead of silently adopting one of them as the answer.
+    """
+    if not author:
+        return []
+    docs = _ol_search({"q": "%s %s" % (title, author)}) or _ol_search({"author": author})
+    seen, out = set(), []
+    for d in docs:
+        if not author_matches(author, " ".join(d.get("author_name") or [])):
+            continue
+        name = d.get("title") or ""
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append({"title": name,
+                    "year": d.get("first_publish_year"),
+                    "key": d.get("key") or "",
+                    "cover_url": ("https://covers.openlibrary.org/b/id/%d-L.jpg" % d["cover_i"])
+                    if d.get("cover_i") else ""})
+    return out[:4]
+
+
+def resolve(title, author, lang, google_key=""):
+    """Identify a book, then keep asking other catalogues for what is missing.
+
+    The first catalogue that confirms the book decides its identity; the ones
+    after it only fill the holes — an annotation, another cover to try — and
+    each contribution is recorded, so a card can say where its blurb came from.
+    """
+    catalogues = [fantlab_lookup, openlibrary_lookup]
+    if lang == "en":
+        catalogues.reverse()
+    catalogues += [royalroad_lookup if lang == "en" else authortoday_lookup,
+                   lambda t, a: googlebooks_lookup(t, a, google_key)]
+
+    # Titles written by hand often trail an explanation — "Гибрид (1-я книга …)".
+    # Catalogues index the bare name, so retry without the parenthesis.
+    bare = re.sub(r"\s*[\(\[].*$", "", title).strip()
+    variants = [title] + ([bare] if bare and bare != title else [])
+
+    found = None
+    for probe in catalogues:
+        for variant in variants:
+            try:
+                hit = probe(variant, author)
+            except Exception:
+                hit = None
+            if not hit:
+                continue
+            if found is None:
+                found = hit
+                found["cover_candidates"] = ([hit["cover_url"]] if hit["cover_url"] else []) \
+                    + list(hit.get("cover_candidates") or [])
+            else:
+                if hit.get("cover_url"):
+                    found.setdefault("cover_candidates", []).append(hit["cover_url"])
+                if hit.get("annotation") and not found.get("annotation"):
+                    found["annotation"] = hit["annotation"]
+                    found["annotation_from"] = hit["source"]
+            break
+        if found and found.get("annotation") and len(found.get("cover_candidates") or []) > 1:
+            break
+
+    if found:
+        return found
+
+    neighbours = openlibrary_neighbours(title, author)
+    hint = ("Точного совпадения нет. У этого автора в каталоге: %s."
+            % ", ".join(n["title"] for n in neighbours)) if neighbours else ""
+    search_url = "https://openlibrary.org/search?" + urllib.parse.urlencode(
+        {"q": "%s %s" % (title, author)}) if lang == "en" else \
+        "https://fantlab.ru/searchmain?searchstr=" + urllib.parse.quote(title)
+    return {"verified": False, "source": "", "source_url": search_url, "title": title,
+            "author": author, "kind": "", "year": None, "annotation": "", "public_rating": None,
+            "public_votes": None, "cover_url": "", "hint": hint,
+            "neighbours": neighbours}
+
+
+def catalogued(book, facts):
+    """Merge a catalogue record into a book without renaming it.
+
+    Catalogues file things under their own wording: "Cradle" is shelved as
+    "Unsouled : Cradle", a trilogy as "… Omnibus". Overwriting the title with
+    that leaves a shelf full of books the reader never asked for — the name a
+    book was recommended under is the one it has to keep. The catalogue's
+    wording is kept beside it and shown as a footnote in the book window.
+    """
+    merged = {k: v for k, v in facts.items() if k not in ("title", "author")}
+    for field in ("title", "author"):
+        theirs, ours = (facts.get(field) or "").strip(), (book.get(field) or "").strip()
+        if theirs and norm(theirs) != norm(ours):
+            merged["catalog_" + field] = theirs
+        elif theirs and not ours:
+            merged[field] = theirs
+    return merged
+
+
+# A printed cover is a tall rectangle. Anything appreciably squarer or wider is
+# something else that got filed as a cover — Open Library takes reader photos,
+# and a shelfie or a square audiobook tile is worse than no picture at all.
+COVER_RATIO = (0.55, 0.80)
+COVER_MIN_W, COVER_MIN_H = 110, 160
+
+
+def usable_cover(data):
+    """Is this actually a book cover? Returns the decoded size, or None."""
+    if not data or len(data) < 2000:
+        return None
+    loader = GdkPixbuf.PixbufLoader()
+    try:
+        loader.write(data)
+        loader.close()
+        pixbuf = loader.get_pixbuf()
+    except Exception:
+        try:
+            loader.close()
+        except Exception:
+            pass
+        return None
+    if pixbuf is None:
+        return None
+    width, height = pixbuf.get_width(), pixbuf.get_height()
+    if width < COVER_MIN_W or height < COVER_MIN_H:
+        return None
+    if not COVER_RATIO[0] <= width / height <= COVER_RATIO[1]:
+        return None
+    return width, height
+
+
+def cover_path(book):
+    """Download the cover once; afterwards it is a local file.
+
+    Every candidate the catalogues offered is tried in turn and the first one
+    that looks like a cover wins, so one bad photograph does not cost the book
+    its picture. A hand-picked cover is never second-guessed.
+    """
+    candidates = [book.get("cover_url") or ""] + list(book.get("cover_candidates") or [])
+    candidates = [u for i, u in enumerate(candidates) if u and u not in candidates[:i]]
+    if not candidates:
+        return None
+
+    COVER_DIR.mkdir(parents=True, exist_ok=True)
+    existing = [COVER_DIR / (book["id"] + ext) for ext in (".jpg", ".png")]
+    for target in existing:
+        if target.exists() and target.stat().st_size > 0:
+            return target
+
+    for url in candidates:
+        if url.startswith("file://"):
+            return Path(urllib.parse.unquote(url[7:]))
+        try:
+            data, etag, modified = http_bytes(url)
+        except Exception:
+            continue
+        if not book.get("cover_manual") and not usable_cover(data):
+            continue
+        target = COVER_DIR / (book["id"] + (".png" if url.lower().endswith(".png") else ".jpg"))
+        target.write_bytes(data)
+        book["cover_url"] = url
+        book["cover_etag"], book["cover_modified"] = etag, modified
+        return target
+
+    # Every candidate was unreachable or not a cover. Leaving the URL in place
+    # would make the book look finished and stop it from ever being retried.
+    book["cover_url"] = ""
+    book["cover_rejected"] = candidates[:3]
+    return None
+
+
+def refresh_cover(book):
+    """Re-download a cover only if the server says it changed. Returns True on
+    a new picture, False when it was already current."""
+    url = book.get("cover_url") or ""
+    if not url or url.startswith("file://") or book.get("cover_manual"):
+        return False
+    try:
+        data, etag, modified = http_bytes(url, etag=book.get("cover_etag", ""),
+                                          modified=book.get("cover_modified", ""))
+    except Exception:
+        return False
+    if data is None:                       # 304: nothing to do, and nothing downloaded
+        return False
+    if not usable_cover(data):
+        return False
+    for stale in COVER_DIR.glob(book["id"] + ".*"):
+        stale.unlink(missing_ok=True)
+    target = COVER_DIR / (book["id"] + (".png" if url.lower().endswith(".png") else ".jpg"))
+    target.write_bytes(data)
+    book["cover_etag"], book["cover_modified"] = etag, modified
+    return True
+
+
+# ── the store ───────────────────────────────────────────────────────────────
+
+class Profile:
+    """One reader's shelf: a name, an optional FantLab id, and their books."""
+
+    def __init__(self, path, data):
+        self.path = path
+        self.data = data
+        self._snapshot()
+
+    def _mtime(self):
+        return self.path.stat().st_mtime_ns if self.path.exists() else 0
+
+    def _snapshot(self):
+        """Remember the file as it was, so a merge can tell our edits from theirs."""
+        self._stamp = self._mtime()
+        self._base = {b.get("id"): dict(b) for b in self.data.get("books", [])}
+
+    @property
+    def name(self):
+        return self.data.get("name", "Без имени")
+
+    @property
+    def books(self):
+        return self.data.setdefault("books", [])
+
+    @classmethod
+    def create(cls, name, fantlab_id=""):
+        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        slug = slugify(name)
+        path = PROFILE_DIR / ("%s.json" % slug)
+        n = 2
+        while path.exists():
+            path = PROFILE_DIR / ("%s-%d.json" % (slug, n))
+            n += 1
+        profile = cls(path, {"name": name, "fantlab_user_id": fantlab_id,
+                             "taste_note": "", "books": [], "runs": []})
+        profile.save()
+        return profile
+
+    @classmethod
+    def load(cls, path):
+        path = Path(path)
+        return cls(path, json.loads(path.read_text("utf-8")))
+
+    @classmethod
+    def all(cls):
+        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        return sorted(PROFILE_DIR.glob("*.json"))
+
+    def save(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self._mtime() != self._stamp:
+            # Someone edited the file while this window had it open — another
+            # instance, or a hand edit. Writing our copy wholesale would silently
+            # revert their work, so merge onto theirs instead: our books win where
+            # we know the id, whatever we deleted stays deleted, and anything they
+            # added that we never saw is kept.
+            try:
+                theirs = json.loads(self.path.read_text("utf-8"))
+            except Exception:
+                theirs = None
+            if theirs:
+                mine = {b.get("id"): b for b in self.books}
+                merged = []
+                for book in theirs.get("books", []):
+                    ours = mine.pop(book.get("id"), None)
+                    if ours is None:
+                        # They added it, or we deleted it. Keeping it is only
+                        # right in the first case, which is the one where we
+                        # never saw the id.
+                        if book.get("id") not in self._base:
+                            merged.append(book)
+                        continue
+                    # Both hold this book: keep theirs and lay our own edits on
+                    # top, field by field, so a rating set in another window is
+                    # not rolled back by a status set in this one.
+                    was = self._base.get(book.get("id"), {})
+                    changed = {k: v for k, v in ours.items() if v != was.get(k)}
+                    merged.append(dict(book, **changed))
+                merged += [b for b in self.books if b.get("id") in mine]
+                theirs.update({k: v for k, v in self.data.items() if k != "books"})
+                theirs["books"] = merged
+                self.data = theirs
+
+        tmp = self.path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), "utf-8")
+        tmp.replace(self.path)
+        self._snapshot()
+
+    def by_status(self, status):
+        return [b for b in self.books if b.get("status") == status]
+
+    def rated(self):
+        return [b for b in self.books if b.get("my_rating") or b.get("impression")]
+
+    def knows(self, title, author):
+        key = (norm(title), surname(author))
+        return any((norm(b.get("title")), surname(b.get("author"))) == key for b in self.books)
+
+    def add(self, book):
+        book.setdefault("id", uuid.uuid4().hex[:12])
+        book.setdefault("added", time.strftime("%Y-%m-%d"))
+        book.setdefault("status", "recommended")
+        book.setdefault("my_rating", None)
+        book.setdefault("impression", "")
+        self.books.append(book)
+        return book
+
+
+def sync_fantlab_marks(profile, user_id, progress=lambda text: None):
+    """Cheapest possible catch-up: the marks list says everything the reader has
+    rated, so one or two requests find both new books and changed marks however
+    large the shelf is. Returns (added, changed)."""
+    added = changed = 0
+    known = {b.get("fantlab_work_id"): b for b in profile.books if b.get("fantlab_work_id")}
+    for page in range(1, 40):
+        try:
+            items = http_json("https://api.fantlab.ru/user/%s/marks?page=%d"
+                              % (user_id, page)).get("items") or []
+        except Exception as exc:
+            progress("оценки не пришли (%s)" % exc)
+            break
+        if not items:
+            break
+        for item in items:
+            book = known.get(item.get("work_id"))
+            if book is None:
+                added += 1
+            elif book.get("my_rating") != item.get("mark"):
+                book["my_rating"] = item.get("mark")
+                book["rated"] = (item.get("mark_date") or "")[:10]
+                changed += 1
+        time.sleep(0.3)
+    if added:
+        import_fantlab_marks(profile, user_id, progress)   # it knows how to shape them
+    profile.save()
+    return added, changed
+
+
+def import_fantlab_marks(profile, user_id, progress=lambda text: None):
+    """Pull a FantLab user's marks in as already-read books with their score."""
+    added = 0
+    for page in range(1, 40):
+        progress("Страница %d…" % page)
+        url = "https://api.fantlab.ru/user/%s/marks?page=%d" % (user_id, page)
+        try:
+            items = http_json(url).get("items") or []
+        except Exception as exc:
+            # Keep whatever already arrived: a timeout on page four should not
+            # throw away the three hundred marks from pages one to three.
+            progress("страница %d не открылась (%s), остановился здесь" % (page, exc))
+            break
+        if not items:
+            break
+        for it in items:
+            title, author = it.get("work_name") or "", it.get("work_author") or ""
+            if not title or profile.knows(title, author):
+                continue
+            image = it.get("work_image") or ""
+            profile.add({
+                "title": title,
+                "author": author,
+                "lang": "ru",
+                "why": "Оценка перенесена из профиля FantLab",
+                "status": "read",
+                "my_rating": it.get("mark"),
+                "impression": "",
+                "verified": True,
+                "source": "fantlab",
+                "source_url": "https://fantlab.ru/work%s" % it.get("work_id"),
+                "fantlab_work_id": it.get("work_id"),
+                "kind": it.get("work_type") or "",
+                "year": it.get("work_year"),
+                "annotation": "",
+                "public_rating": None,
+                "public_votes": None,
+                "cover_url": ("https://fantlab.ru" + image) if image.startswith("/") else image,
+                "added": (it.get("mark_date") or "")[:10],
+            })
+            added += 1
+        profile.save()
+        time.sleep(0.3)
+    return added
+
+
+def import_legacy_log(profile):
+    """Seed the shelf from recommendations-log.md, if a past session wrote one."""
+    if not LEGACY_LOG.exists():
+        return 0
+    added = 0
+    for line in LEGACY_LOG.read_text("utf-8").splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")] if line.startswith("|") else []
+        if len(cells) < 5 or cells[0].startswith(("Дата", "---")) or not cells[0][:4].isdigit():
+            continue
+        date, title, author, why, status = cells[0], cells[1], cells[2], cells[3], cells[4]
+        if not title or profile.knows(title, author):
+            continue
+        dropped = ("не советую" in status.lower() or "отозвано" in status.lower()
+                   or "не подходит" in status.lower())
+        profile.add({"title": title, "author": author, "lang": "en" if title.isascii() else "ru",
+                     "why": why, "status": "skipped" if dropped else "recommended",
+                     "verified": False, "source": "", "source_url": "", "kind": "", "year": None,
+                     "annotation": "", "public_rating": None, "public_votes": None,
+                     "cover_url": "", "added": date,
+                     "note": status if dropped else ""})
+        added += 1
+    profile.save()
+    return added
+
+
+# ── asking Claude ───────────────────────────────────────────────────────────
+
+SYSTEM_PROMPT = (
+    "Ты — библиотекарь, который подбирает книги под вкус конкретного читателя.\n"
+    "Отвечай ТОЛЬКО JSON-массивом, без пояснений и без markdown-ограждений.\n"
+    'Элемент массива: {"title": str, "author": str, "lang": "ru" или "en", "why": str}.\n'
+    "title — название цикла или первой книги ровно так, как оно издано; "
+    "author — как его принято писать на языке оригинала; "
+    "why — одно-два предложения о том, чем книга подходит именно этому читателю.\n"
+    "Не выдумывай названий: если не уверен, что книга существует, не включай её."
+)
+
+
+def build_prompt(profile, ask, count):
+    liked = sorted((b for b in profile.books if (b.get("my_rating") or 0) >= 9),
+                   key=lambda b: -(b.get("my_rating") or 0))[:25]
+    disliked = [b for b in profile.books if b.get("my_rating") and b["my_rating"] <= 6][:15]
+    impressions = [b for b in profile.books if b.get("impression")][:10]
+    known = [b.get("title", "") for b in profile.books][:120]
+
+    lines = ["Подбери %d книг для читателя." % count]
+    if profile.data.get("taste_note"):
+        lines += ["", "О читателе: " + profile.data["taste_note"]]
+    if liked:
+        lines += ["", "Ставил высокие оценки:"] + \
+                 ["- %s — %s (%s)" % (b.get("author", ""), b.get("title", ""), b.get("my_rating")) for b in liked]
+    if disliked:
+        lines += ["", "Оценил низко (такое не предлагать):"] + \
+                 ["- %s — %s (%s)" % (b.get("author", ""), b.get("title", ""), b.get("my_rating")) for b in disliked]
+    if impressions:
+        lines += ["", "Его впечатления своими словами:"] + \
+                 ["- %s: %s" % (b.get("title", ""), b["impression"][:300]) for b in impressions]
+    if known:
+        lines += ["", "Уже известно ему, не повторять: " + "; ".join(t for t in known if t)]
+    if ask.strip():
+        lines += ["", "Отдельное пожелание на эту подборку: " + ask.strip()]
+    lines += ["", "Верни ровно %d рекомендаций." % count]
+    return "\n".join(lines)
+
+
+class ClaudeRun:
+    """One `claude -p` call, running off the UI thread and cancellable."""
+
+    def __init__(self, prompt, model, web):
+        self.cmd = [
+            "claude", "-p", prompt,
+            "--output-format", "json",
+            "--model", model,
+            "--system-prompt", SYSTEM_PROMPT,
+            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+            "--disable-slash-commands",
+            "--setting-sources", "",
+            "--no-session-persistence",
+        ]
+        if web:
+            self.cmd += ["--allowedTools", "WebSearch", "WebFetch"]
+        else:
+            self.cmd += ["--disallowedTools", "WebSearch", "WebFetch", "Bash", "Edit", "Write"]
+        self.proc = None
+        self.cancelled = False
+
+    def cancel(self):
+        self.cancelled = True
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+
+    def run(self):
+        """Returns (books, error_text)."""
+        try:
+            self.proc = subprocess.Popen(self.cmd, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE, text=True)
+            out, err = self.proc.communicate(timeout=900)
+        except FileNotFoundError:
+            return [], "CLI `claude` не найден в PATH."
+        except subprocess.TimeoutExpired:
+            self.cancel()
+            return [], "Claude не ответил за 15 минут."
+        if self.cancelled:
+            return [], ""
+
+        try:
+            envelope = json.loads(out)
+        except Exception:
+            return [], (err or out or "Claude вернул не-JSON").strip()[:400]
+        if envelope.get("is_error") or envelope.get("subtype") != "success":
+            return [], str(envelope.get("result") or envelope.get("subtype") or "ошибка")[:400]
+
+        payload = envelope.get("result") or ""
+        match = re.search(r"\[.*\]", payload, re.S)
+        if not match:
+            return [], "В ответе нет JSON-массива: " + payload.strip()[:200]
+        try:
+            items = json.loads(match.group(0))
+        except Exception as exc:
+            return [], "Не разобрал JSON: %s" % exc
+
+        books = []
+        for it in items:
+            if isinstance(it, dict) and it.get("title"):
+                books.append({"title": str(it["title"]).strip(),
+                              "author": str(it.get("author") or "").strip(),
+                              "lang": "en" if it.get("lang") == "en" else "ru",
+                              "why": str(it.get("why") or "").strip()})
+        return books, ""
+
+
+# ── look ────────────────────────────────────────────────────────────────────
+# The palette of random-wallpaper, moved from a light table to a shelf: same
+# near-black with a blue bias, same hairline borders, same warm accent, same
+# monospace for anything numeric.
+CSS = """
+.root { background: #0E0F16; color: #E6E7F0; font-family: "Noto Sans", sans-serif; }
+
+.topbar {
+    background: #171925;
+    border-bottom: 1px solid #262A3D;
+    padding: 8px 14px;
+}
+.wordmark {
+    font-family: "JetBrains Mono Nerd Font", "JetBrains Mono", monospace;
+    font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #F2D98C;
+}
+.eyebrow {
+    font-family: "JetBrains Mono Nerd Font", "JetBrains Mono", monospace;
+    font-size: 9px; font-weight: 700; letter-spacing: 1.6px; color: #8B90A8;
+}
+.mono {
+    font-family: "JetBrains Mono Nerd Font", "JetBrains Mono", monospace;
+    font-size: 11px; font-feature-settings: "tnum"; color: #8B90A8;
+}
+.title { font-size: 14px; color: #E6E7F0; }
+.subtle { color: #8B90A8; font-size: 12px; }
+.placeholder { color: #4C5170; font-size: 13px; }
+.hint { color: #E06C6C; font-size: 12px; }
+.stage { background: #0A0B10; }
+
+/* tabs — GtkStackSwitcher is Adwaita by default and has to be told otherwise */
+.tabs { background: #171925; padding: 0 8px; }
+.tabs button {
+    background: transparent;
+    color: #8B90A8;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    padding: 9px 16px;
+    box-shadow: none;
+    font-size: 13px;
+    min-height: 0;
+}
+.tabs button:hover { color: #E6E7F0; background: #1E2130; }
+.tabs button:checked { color: #F2D98C; border-bottom-color: #F2D98C; }
+
+.btn {
+    background: #1E2130; color: #E6E7F0;
+    border: 1px solid #262A3D; border-radius: 5px;
+    padding: 7px 16px; font-size: 13px;
+    min-height: 0; box-shadow: none; text-shadow: none;
+}
+.btn:hover { background: #262A3D; border-color: #39405C; }
+.btn:active { background: #171925; }
+.btn:disabled { color: #4C5170; border-color: #1E2130; background: #141622; }
+.btn:focus-visible { outline: 2px solid #F2D98C; outline-offset: 1px; }
+.btn-accent { background: #F2D98C; color: #14151F; border-color: #F2D98C; font-weight: 700; }
+.btn-accent:hover { background: #F7E4A8; border-color: #F7E4A8; }
+.btn-accent:active { background: #D9C079; }
+.btn-danger { color: #E06C6C; border-color: #4A2A31; }
+.btn-danger:hover { background: #33202A; border-color: #6B3A44; }
+.btn-icon { padding: 6px 10px; }
+
+.card { background: #171925; border: 1px solid #262A3D; border-radius: 6px; padding: 14px; }
+
+/* a shelf card: cover on top, hairline box, accent ring when it has your mark */
+.book { background: #14151F; border: 1px solid #262A3D; border-radius: 4px; padding: 0; }
+.book:hover { border-color: #39405C; background: #171925; }
+.book.mine { border-color: #F2D98C; }
+.book-body { padding: 9px 10px 11px 10px; }
+.cover { background: #0A0B10; border-bottom: 1px solid #262A3D; }
+.book-title { font-size: 12px; color: #E6E7F0; }
+.book-author { font-size: 11px; color: #8B90A8; }
+
+.badge {
+    font-family: "JetBrains Mono Nerd Font", "JetBrains Mono", monospace;
+    font-size: 9px; font-weight: 700; letter-spacing: 1px;
+    background: #1E2130; color: #8B90A8;
+    border: 1px solid #262A3D; border-radius: 3px;
+    padding: 1px 5px;
+}
+.badge-warn { color: #E06C6C; border-color: #4A2A31; background: #241A20; }
+.badge-mine { color: #14151F; background: #F2D98C; border-color: #F2D98C; }
+
+/* the ten-button rating strip */
+.rate {
+    font-family: "JetBrains Mono Nerd Font", "JetBrains Mono", monospace;
+    font-size: 11px;
+    background: #14151F; color: #8B90A8;
+    border: 1px solid #262A3D; border-radius: 3px;
+    padding: 4px 0; min-width: 26px; min-height: 0; box-shadow: none;
+}
+.rate:hover { border-color: #39405C; color: #E6E7F0; }
+.rate.on { background: #F2D98C; color: #14151F; border-color: #F2D98C; font-weight: 700; }
+/* the mark picker inside a cycle listing */
+menubutton.rate > button {
+    background: transparent; color: inherit; border: 0;
+    padding: 0; min-width: 24px; min-height: 0; box-shadow: none;
+}
+popover > contents, popover > arrow {
+    background: #171925;
+    border: 1px solid #262A3D;
+    color: #E6E7F0;
+}
+scrollbar slider { background: #262A3D; border-radius: 3px; min-width: 6px; }
+scrollbar slider:hover { background: #39405C; }
+
+entry, textview, textview text {
+    background: #0A0B10; color: #E6E7F0;
+    border-radius: 4px;
+    caret-color: #F2D98C;
+}
+entry { border: 1px solid #262A3D; padding: 7px 9px; }
+entry:focus { border-color: #39405C; }
+.frame { border: 1px solid #262A3D; border-radius: 4px; background: #0A0B10; }
+textview { padding: 8px; font-size: 13px; }
+
+dropdown > button {
+    background: #1E2130; color: #E6E7F0;
+    border: 1px solid #262A3D; border-radius: 4px; box-shadow: none;
+}
+checkbutton { color: #E6E7F0; font-size: 13px; }
+.progress trough {
+    background: #14151F;
+    border: 1px solid #262A3D;
+    border-radius: 3px;
+    min-height: 6px;
+}
+.progress progress {
+    background: #F2D98C;
+    border-radius: 2px;
+    min-height: 6px;
+}
+.log {
+    font-family: "JetBrains Mono Nerd Font", "JetBrains Mono", monospace;
+    font-size: 11px; color: #8B90A8;
+}
+.toast {
+    background: #262A3D; color: #E6E7F0;
+    border: 1px solid #39405C; border-radius: 5px;
+    padding: 9px 14px; font-size: 12px;
+}
+scrollbar { background: transparent; }
+"""
+
+
+def eyebrow(text):
+    label = Gtk.Label(label=text, xalign=0)
+    label.add_css_class("eyebrow")
+    return label
+
+
+def badge(text, kind=""):
+    label = Gtk.Label(label=text)
+    label.add_css_class("badge")
+    if kind:
+        label.add_css_class("badge-" + kind)
+    label.set_valign(Gtk.Align.CENTER)
+    return label
+
+
+def button(label, handler, css=None, tooltip=""):
+    btn = Gtk.Button(label=label)
+    btn.add_css_class("btn")
+    if css:
+        btn.add_css_class(css)
+    if tooltip:
+        btn.set_tooltip_text(tooltip)
+    btn.connect("clicked", handler)
+    return btn
+
+
+def scrolled(child, vexpand=True):
+    sw = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+    sw.set_vexpand(vexpand)
+    sw.set_child(child)
+    return sw
+
+
+def load_cover_async(book, widget, width=COVER_W, height=COVER_H):
+    """Fetch the cover in a worker thread; drop it into `widget` when it lands."""
+    def work():
+        path = cover_path(book)
+        if not path:
+            return
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), width, height, True)
+        except Exception:
+            return
+        texture = Gdk.Texture.new_for_pixbuf(pixbuf)
+        GLib.idle_add(widget.set_paintable, texture)
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+class RatingStrip(Gtk.Box):
+    """Ten buttons, 1..10. Clicking the current mark clears it."""
+
+    def __init__(self, value, on_change):
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
+        self.on_change = on_change
+        self.value = value
+        self.buttons = []
+        for n in range(1, 11):
+            btn = Gtk.Button(label=str(n))
+            btn.add_css_class("rate")
+            btn.connect("clicked", self._clicked, n)
+            self.append(btn)
+            self.buttons.append(btn)
+        self._paint()
+
+    def _clicked(self, _btn, n):
+        self.value = None if self.value == n else n
+        self._paint()
+        self.on_change(self.value)
+
+    def _paint(self):
+        for n, btn in enumerate(self.buttons, start=1):
+            if self.value and n <= self.value:
+                btn.add_css_class("on")
+            else:
+                btn.remove_css_class("on")
+
+
+# ── the book window ─────────────────────────────────────────────────────────
+
+class BookWindow(Gtk.Window):
+    """Cover, annotation, why it was recommended — and your own verdict."""
+
+    def __init__(self, parent, app, book):
+        super().__init__(title=book.get("title", "Книга"), transient_for=parent, modal=True)
+        self.app = app
+        self.book = book
+        self.set_default_size(820, 720)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        root.add_css_class("root")
+        self.set_child(root)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=18)
+        body.set_margin_start(18)
+        body.set_margin_end(18)
+        body.set_margin_top(18)
+        body.set_margin_bottom(12)
+
+        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.picture = Gtk.Picture()
+        self.picture.set_size_request(190, 280)
+        self.picture.add_css_class("cover")
+        self.picture.set_content_fit(Gtk.ContentFit.CONTAIN)
+        left.append(self.picture)
+        load_cover_async(book, self.picture, 190, 280)
+
+        for text, kind in self._badges():
+            left.append(badge(text, kind))
+        left.append(button("Своя обложка", self._pick_cover,
+                           tooltip="Выбрать файл на диске — он станет обложкой этой книги"))
+        if book.get("cover_from"):
+            note = Gtk.Label(label="обложка: «%s»" % book["cover_from"],
+                             xalign=0, wrap=True, max_width_chars=24)
+            note.add_css_class("mono")
+            left.append(note)
+        if book.get("source_url"):
+            link = Gtk.LinkButton(uri=book["source_url"],
+                                  label="Открыть карточку" if book.get("verified") else "Искать вручную")
+            link.add_css_class("btn")
+            left.append(link)
+        body.append(left)
+
+        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        right.set_hexpand(True)
+
+        title = Gtk.Label(label=book.get("title", ""), xalign=0, wrap=True)
+        title.add_css_class("title")
+        right.append(title)
+        author = Gtk.Label(label=book.get("author", "") or "автор неизвестен", xalign=0, wrap=True)
+        author.add_css_class("subtle")
+        right.append(author)
+
+        if book.get("catalog_title"):
+            other = Gtk.Label(label="в каталоге: %s" % book["catalog_title"],
+                              xalign=0, wrap=True)
+            other.add_css_class("mono")
+            right.append(other)
+
+        meta = " · ".join(str(x) for x in [book.get("kind") or "", book.get("year") or "",
+                                           self._public()] if x)
+        if meta:
+            line = Gtk.Label(label=meta, xalign=0)
+            line.add_css_class("mono")
+            right.append(line)
+
+        if book.get("why"):
+            right.append(eyebrow("ПОЧЕМУ ТЕБЕ"))
+            why = Gtk.Label(label=book["why"], xalign=0, wrap=True)
+            why.add_css_class("subtle")
+            right.append(why)
+
+        source_note = {"royalroad": "Royal Road", "authortoday": "Author.Today",
+                       "googlebooks": "Google Books", "openlibrary": "Open Library",
+                       "fantlab": "FantLab"}.get(book.get("annotation_from"),
+                                                 book.get("annotation_from"))
+        right.append(eyebrow("АННОТАЦИЯ" + (" · %s" % source_note.upper() if source_note else "")))
+        if book.get("verified"):
+            text = book.get("annotation") or "Аннотации в каталоге нет."
+        else:
+            text = ("Книга не найдена ни на FantLab, ни в Open Library — считай её "
+                    "непроверенной, пока не убедишься сам.")
+        annotation = Gtk.Label(label=text, xalign=0, wrap=True, yalign=0)
+        annotation.add_css_class("subtle")
+
+        # Blurb and the run of books share one scroller: a Holmes cycle brings
+        # seventy-seven rows, and they must not push the rating strip off-window.
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        content.append(annotation)
+
+        # A miss is usually a naming difference: the catalogue files a series
+        # under the title of its first volume ("Mage Errant" as "Into the
+        # Labyrinth"). Adopting one of those silently would be a rename, so the
+        # choice is offered instead — one click, and it is labelled afterwards.
+        if book.get("neighbours") and not book.get("cover_url"):
+            content.append(eyebrow("ЧТО ЕСТЬ У ЭТОГО АВТОРА В КАТАЛОГЕ"))
+            for other in book["neighbours"]:
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                label = Gtk.Label(label=other["title"] + (" · %s" % other["year"]
+                                                          if other.get("year") else ""),
+                                  xalign=0, wrap=True)
+                label.add_css_class("subtle")
+                label.set_hexpand(True)
+                row.append(label)
+                if other.get("cover_url"):
+                    row.append(button("Взять обложку",
+                                      lambda _b, o=other: self._adopt(o),
+                                      tooltip="Использовать обложку и аннотацию этой записи"))
+                content.append(row)
+        self.cycle_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        content.append(self.cycle_box)
+        holder = scrolled(content)
+        holder.set_vexpand(True)
+        # Overlay scrollbars are drawn *over* the content, and the thing they
+        # covered here was the column of marks on the right.
+        holder.set_overlay_scrolling(False)
+        right.append(holder)
+        if book.get("fantlab_work_id"):
+            self._load_cycle(book["fantlab_work_id"])
+
+        right.append(eyebrow("МОЯ ОЦЕНКА"))
+        right.append(RatingStrip(book.get("my_rating"), self._set_rating))
+
+        right.append(eyebrow("ВПЕЧАТЛЕНИЕ"))
+        self.impression = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD)
+        self.impression.get_buffer().set_text(book.get("impression") or "")
+        holder = scrolled(self.impression, vexpand=False)
+        holder.set_size_request(-1, 110)
+        holder.add_css_class("frame")
+        right.append(holder)
+
+        body.append(right)
+        root.append(body)
+
+        bottom = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        bottom.set_margin_start(18)
+        bottom.set_margin_end(18)
+        bottom.set_margin_bottom(16)
+
+        bottom.append(Gtk.Label(label="Статус"))
+        self.status = Gtk.DropDown.new_from_strings([label for _, label in STATUSES])
+        keys = [key for key, _ in STATUSES]
+        self.status.set_selected(keys.index(book.get("status", "recommended"))
+                                 if book.get("status") in keys else 0)
+        self.status.connect("notify::selected", self._set_status)
+        bottom.append(self.status)
+
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        bottom.append(spacer)
+        bottom.append(button("Удалить с полки", self._delete, "btn-danger"))
+        bottom.append(button("Сохранить", self._save, "btn-accent"))
+        root.append(bottom)
+
+    def _load_cycle(self, work_id):
+        """Fetch the cycle's books off the UI thread and list them when they land."""
+        def work():
+            books = cycle_books(work_id)
+            if books:
+                GLib.idle_add(self._show_cycle, books)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_cycle(self, books):
+        mine = {b.get("fantlab_work_id"): b.get("my_rating")
+                for b in self.app.profile.books if b.get("my_rating")}
+
+        self.cycle_box.append(eyebrow("КНИГИ ЦИКЛА · %d" % len(books)))
+        listing = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        for number, book in enumerate(books, start=1):
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            index = Gtk.Label(label="%2d" % number, xalign=1)
+            index.add_css_class("mono")
+            row.append(index)
+
+            name = Gtk.Label(label=book["title"], xalign=0, ellipsize=3, max_width_chars=38)
+            name.add_css_class("subtle")
+            name.set_hexpand(True)
+            row.append(name)
+
+            if book.get("year"):
+                year = Gtk.Label(label=str(book["year"]))
+                year.add_css_class("mono")
+                row.append(year)
+
+            if book.get("rating"):
+                fl = Gtk.Label(label="%.2f" % book["rating"])
+                fl.add_css_class("mono")
+                fl.set_tooltip_text("Оценка FantLab, %s голосов" % (book.get("votes") or "?"))
+                row.append(fl)
+
+            # Your own mark for that volume — settable right here, because
+            # rating a cycle as a whole loses exactly the thing you wanted to
+            # remember: which book in the run was the good one.
+            row.append(self._mark_button(book, mine.get(book["work_id"])))
+            listing.append(row)
+
+        self.cycle_box.append(listing)
+        return False
+
+    def _adopt(self, other):
+        """Take a neighbouring record's cover — and say whose it is."""
+        self.book["cover_url"] = other["cover_url"]
+        self.book["cover_from"] = other["title"]
+        self.book.pop("cover_etag", None)
+        for stale in COVER_DIR.glob(self.book["id"] + ".*"):
+            stale.unlink(missing_ok=True)
+
+        def work():
+            cover_path(self.book)
+            GLib.idle_add(load_cover_async, self.book, self.picture, 190, 280)
+            GLib.idle_add(self.app.save_and_refresh)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _mark_button(self, child, value):
+        """A one-click 1–10 picker for a single volume of the cycle."""
+        button = Gtk.MenuButton(label=str(value) if value else "—")
+        button.add_css_class("rate")
+        if value:
+            button.add_css_class("on")
+        button.set_valign(Gtk.Align.CENTER)
+
+        popover = Gtk.Popover()
+        popover.add_css_class("root")
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
+        box.set_margin_start(8)
+        box.set_margin_end(8)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+
+        def choose(_b, mark):
+            popover.popdown()
+            self._rate_child(child, mark)
+            button.set_label(str(mark) if mark else "—")
+            if mark:
+                button.add_css_class("on")
+            else:
+                button.remove_css_class("on")
+
+        clear = Gtk.Button(label="—")
+        clear.add_css_class("rate")
+        clear.connect("clicked", choose, None)
+        box.append(clear)
+        for mark in range(1, 11):
+            pick = Gtk.Button(label=str(mark))
+            pick.add_css_class("rate")
+            pick.connect("clicked", choose, mark)
+            box.append(pick)
+        popover.set_child(box)
+        button.set_popover(popover)
+        return button
+
+    def _rate_child(self, child, mark):
+        """Store a mark for one book of the cycle, adding it to the shelf if it
+        is not there yet — the cycle's own entry is a different book."""
+        existing = None
+        for book in self.app.profile.books:
+            if book.get("fantlab_work_id") == child["work_id"]:
+                existing = book
+                break
+        if existing is None:
+            if mark is None:
+                return
+            existing = self.app.profile.add({
+                "title": child["title"],
+                "author": self.book.get("author", ""),
+                "lang": self.book.get("lang", "ru"),
+                "why": "Оценка поставлена в карточке цикла «%s»" % self.book.get("title", ""),
+                "status": "read",
+                "verified": True,
+                "source": "fantlab",
+                "source_url": "https://fantlab.ru/work%s" % child["work_id"],
+                "fantlab_work_id": child["work_id"],
+                "kind": child.get("kind", ""),
+                "year": child.get("year"),
+                "annotation": "",
+                "public_rating": child.get("rating"),
+                "public_votes": child.get("votes"),
+                "cover_url": "",
+            })
+        existing["my_rating"] = mark
+        existing["rated"] = time.strftime("%Y-%m-%d")
+        if mark and existing.get("status") == "recommended":
+            existing["status"] = "read"
+        self.app.save_and_refresh()
+
+    def _pick_cover(self, _btn):
+        chooser = Gtk.FileChooserNative(title="Обложка для «%s»" % self.book.get("title", ""),
+                                        transient_for=self, action=Gtk.FileChooserAction.OPEN)
+        images = Gtk.FileFilter()
+        images.set_name("Изображения")
+        for pattern in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
+            images.add_pattern(pattern)
+        chooser.add_filter(images)
+
+        def chosen(dialog, response):
+            path = dialog.get_file().get_path() if response == Gtk.ResponseType.ACCEPT \
+                and dialog.get_file() else None
+            dialog.destroy()
+            if not path:
+                return
+            # Copied, not linked: the picture has to survive the original being
+            # moved. Marked manual so the shape check never overrules the choice.
+            COVER_DIR.mkdir(parents=True, exist_ok=True)
+            suffix = Path(path).suffix.lower() or ".jpg"
+            for stale in COVER_DIR.glob(self.book["id"] + ".*"):
+                stale.unlink(missing_ok=True)
+            target = COVER_DIR / (self.book["id"] + (".png" if suffix == ".png" else ".jpg"))
+            shutil.copyfile(path, target)
+            self.book["cover_manual"] = True
+            self.book["cover_url"] = "file://" + urllib.parse.quote(str(target))
+            self.book.pop("cover_from", None)
+            self.app.save_and_refresh()
+            load_cover_async(self.book, self.picture, 190, 280)
+
+        chooser.connect("response", chosen)
+        chooser.show()
+        self._chooser = chooser                      # keep it alive until it answers
+
+    def _badges(self):
+        out = []
+        if self.book.get("verified"):
+            out.append(("FANTLAB" if self.book.get("source") == "fantlab" else "OPEN LIBRARY", ""))
+        else:
+            out.append(("НЕ ПОДТВЕРЖДЕНО", "warn"))
+        if self.book.get("my_rating"):
+            out.append(("МОЯ %d/10" % self.book["my_rating"], "mine"))
+        return out
+
+    def _public(self):
+        rating, votes = self.book.get("public_rating"), self.book.get("public_votes")
+        if not rating:
+            return ""
+        scale = "10" if self.book.get("source") == "fantlab" else "5"
+        return "%.2f из %s (%s оценок)" % (float(rating), scale, votes or "?")
+
+    def _set_rating(self, value):
+        self.book["my_rating"] = value
+        if value and self.book.get("status") == "recommended":
+            self.book["status"] = "read"
+            self.status.set_selected([k for k, _ in STATUSES].index("read"))
+        # Persist at once: closing the window with X should not lose the mark.
+        self.book["rated"] = time.strftime("%Y-%m-%d")
+        self.app.save_and_refresh()
+
+    def _set_status(self, dropdown, _param):
+        self.book["status"] = STATUSES[dropdown.get_selected()][0]
+
+    def _read_impression(self):
+        buf = self.impression.get_buffer()
+        return buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).strip()
+
+    def _save(self, _btn):
+        self.book["impression"] = self._read_impression()
+        if self.book.get("my_rating") or self.book["impression"]:
+            self.book["rated"] = time.strftime("%Y-%m-%d")
+        self.app.save_and_refresh()
+        self.close()
+
+    def _delete(self, _btn):
+        self.app.profile.books.remove(self.book)
+        self.app.save_and_refresh()
+        self.close()
+
+
+class BookCard(Gtk.Button):
+    def __init__(self, app, book, parent_window):
+        super().__init__()
+        self.add_css_class("book")
+        if book.get("my_rating"):
+            self.add_css_class("mine")
+        self.set_size_request(COVER_W + 20, -1)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+        frame = Gtk.Box()
+        frame.set_size_request(COVER_W, COVER_H)
+        frame.set_overflow(Gtk.Overflow.HIDDEN)      # COVER fit spills otherwise
+        frame.add_css_class("cover")
+        picture = Gtk.Picture()
+        picture.set_content_fit(Gtk.ContentFit.COVER)
+        picture.set_hexpand(True)
+        picture.set_vexpand(True)
+        frame.append(picture)
+        box.append(frame)
+        load_cover_async(book, picture)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        body.add_css_class("book-body")
+
+        title = Gtk.Label(label=book.get("title", ""), xalign=0, wrap=True, lines=2,
+                          ellipsize=3, max_width_chars=18)
+        title.add_css_class("book-title")
+        body.append(title)
+
+        author = Gtk.Label(label=book.get("author", ""), xalign=0, ellipsize=3, max_width_chars=18)
+        author.add_css_class("book-author")
+        body.append(author)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        if book.get("my_rating"):
+            row.append(badge("%d/10" % book["my_rating"], "mine"))
+        if not book.get("verified"):
+            row.append(badge("?", "warn"))
+        elif book.get("public_rating"):
+            row.append(badge("%s %.1f" % ("FL" if book.get("source") == "fantlab" else "OL",
+                                          float(book["public_rating"]))))
+        if book.get("kind"):
+            row.append(badge(book["kind"].upper()))
+        body.append(row)
+
+        box.append(body)
+        self.set_child(box)
+        self.connect("clicked", lambda _b: BookWindow(parent_window, app, book).present())
+
+
+class BookGrid(Gtk.FlowBox):
+    def __init__(self):
+        super().__init__(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
+                         column_spacing=12, row_spacing=12, max_children_per_line=8,
+                         min_children_per_line=2, valign=Gtk.Align.START)
+        self.set_margin_start(16)
+        self.set_margin_end(16)
+        self.set_margin_top(16)
+        self.set_margin_bottom(16)
+
+    def fill(self, app, books, window, empty_text):
+        while (child := self.get_first_child()) is not None:
+            self.remove(child)
+        if not books:
+            label = Gtk.Label(label=empty_text)
+            label.add_css_class("placeholder")
+            self.append(label)
+            return
+        for book in books:
+            self.append(BookCard(app, book, window))
+
+
+# ── the application ─────────────────────────────────────────────────────────
+
+class Bookshelf(Gtk.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title="Bookshelf")
+        self.set_default_size(1180, 820)
+        self.run_job = None
+
+        self.config = self._load_config()
+        self.profile = self._pick_profile()
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        root.add_css_class("root")
+        self.set_child(root)
+
+        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        top.add_css_class("topbar")
+        wordmark = Gtk.Label(label="BOOKSHELF")
+        wordmark.add_css_class("wordmark")
+        top.append(wordmark)
+        self.summary = Gtk.Label(label="", xalign=0)
+        self.summary.add_css_class("mono")
+        top.append(self.summary)
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        top.append(spacer)
+
+        # Work happens in threads and the user may be on any tab, so the bar
+        # says what is going on where it is always visible.
+        self.progress_text = Gtk.Label(label="", xalign=1, ellipsize=3, max_width_chars=52)
+        self.progress_text.add_css_class("mono")
+        top.append(self.progress_text)
+        self.progress = Gtk.ProgressBar()
+        self.progress.add_css_class("progress")
+        self.progress.set_size_request(130, -1)
+        self.progress.set_valign(Gtk.Align.CENTER)
+        self.progress.set_visible(False)
+        top.append(self.progress)
+
+        self.who = Gtk.Label(label="")
+        self.who.add_css_class("mono")
+        top.append(self.who)
+        root.append(top)
+
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.NONE)
+        switcher = Gtk.StackSwitcher(stack=self.stack)
+        switcher.add_css_class("tabs")
+        root.append(switcher)
+
+        self.stack.add_titled(self._shelf_page(), "shelf", "Полка")
+        self.stack.add_titled(self._ratings_page(), "ratings", "Оценки")
+        self.stack.add_titled(self._discover_page(), "discover", "Подбор")
+        self.stack.add_titled(self._profiles_page(), "profiles", "Профили")
+        self.stack.set_vexpand(True)
+        self.stack.add_css_class("stage")
+        root.append(self.stack)
+
+        self.load_profile_fields()
+        self.refresh()
+        # Every launch catches up: new marks, then whatever never got a card,
+        # then a slice of the rest revalidated against the catalogues.
+        GLib.timeout_add(600, self._refresh_on_launch)
+
+    # config / profiles ------------------------------------------------------
+
+    def _load_config(self):
+        if CONFIG_FILE.exists():
+            try:
+                return json.loads(CONFIG_FILE.read_text("utf-8"))
+            except Exception:
+                pass
+        return {}
+
+    def _save_config(self):
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        CONFIG_FILE.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), "utf-8")
+
+    def _pick_profile(self):
+        paths = Profile.all()
+        if not paths:
+            profile = Profile.create("Иван", "208739")
+            import_legacy_log(profile)
+            return profile
+        wanted = self.config.get("profile")
+        for path in paths:
+            if str(path) == wanted:
+                try:
+                    return Profile.load(path)
+                except Exception:
+                    break
+        return Profile.load(paths[0])
+
+    def switch_profile(self, path):
+        self.profile = Profile.load(path)
+        self.config["profile"] = str(path)
+        self._save_config()
+        self.load_profile_fields()
+        self.refresh()
+
+    def load_profile_fields(self):
+        """Only when the profile itself changes — refresh() runs on every save,
+        and re-filling these would eat whatever the user is typing."""
+        self.taste.get_buffer().set_text(self.profile.data.get("taste_note", ""))
+        self.fantlab_id.set_text(self.profile.data.get("fantlab_user_id", ""))
+        self.google_key.set_text(self.profile.data.get("google_books_key", ""))
+
+    # pages ------------------------------------------------------------------
+
+    def _shelf_page(self):
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        bar.set_margin_start(16)
+        bar.set_margin_end(16)
+        bar.set_margin_top(14)
+        bar.append(eyebrow("ЧТО ТЕБЕ СОВЕТУЮТ"))
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        bar.append(spacer)
+        self.shelf_filter = Gtk.DropDown.new_from_strings(
+            ["В подборке", "Читаю", "Отложено", "Все книги"])
+        self.shelf_filter.connect("notify::selected", lambda *_: self.refresh())
+        bar.append(self.shelf_filter)
+        self.enrich_btn = button("Обновить обложки", lambda _b: self._enrich_shelf(), tooltip=
+                                 "Дозагрузить обложки и аннотации для книг без карточки")
+        bar.append(self.enrich_btn)
+        page.append(bar)
+
+        self.shelf = BookGrid()
+        page.append(scrolled(self.shelf))
+        return page
+
+    def _ratings_page(self):
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        bar.set_margin_start(16)
+        bar.set_margin_end(16)
+        bar.set_margin_top(14)
+        bar.append(eyebrow("МОИ ОЦЕНКИ И ВПЕЧАТЛЕНИЯ"))
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        bar.append(spacer)
+        self.ratings_sort = Gtk.DropDown.new_from_strings(
+            ["Сначала высокие", "Сначала низкие", "По автору", "Сначала новые"])
+        self.ratings_sort.connect("notify::selected", lambda *_: self.refresh())
+        bar.append(self.ratings_sort)
+        self.ratings_search = Gtk.Entry(placeholder_text="Поиск по названию или автору")
+        self.ratings_search.set_hexpand(False)
+        self.ratings_search.set_size_request(260, -1)
+        self.ratings_search.connect("changed", lambda *_: self.refresh())
+        bar.append(self.ratings_search)
+        page.append(bar)
+
+        self.ratings = BookGrid()
+        page.append(scrolled(self.ratings))
+        return page
+
+    def _discover_page(self):
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        page.set_margin_start(18)
+        page.set_margin_end(18)
+        page.set_margin_top(16)
+        page.set_margin_bottom(16)
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        card.add_css_class("card")
+        card.append(eyebrow("ЧЕГО ХОЧЕТСЯ НА ЭТОТ РАЗ"))
+
+        self.ask = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD)
+        self.ask.get_buffer().set_text(self.config.get("last_ask", ""))
+        holder = scrolled(self.ask, vexpand=False)
+        holder.set_size_request(-1, 96)
+        holder.add_css_class("frame")
+        card.append(holder)
+
+        hint = Gtk.Label(xalign=0, wrap=True, label=(
+            "Свободный текст: «магическая академия, интриги аристократов, никто из "
+            "любимых героев не умирает», «что-то короткое на выходные», «как Тёмный "
+            "травник, но не ЛитРПГ». Пусто — подберу по твоим оценкам."))
+        hint.add_css_class("subtle")
+        card.append(hint)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.append(Gtk.Label(label="Книг"))
+        self.count = Gtk.DropDown.new_from_strings(["3", "5", "8", "12"])
+        self.count.set_selected(1)
+        row.append(self.count)
+        row.append(Gtk.Label(label="Модель"))
+        self.model = Gtk.DropDown.new_from_strings([label for label, _ in MODELS])
+        row.append(self.model)
+        self.web = Gtk.CheckButton(label="Сверяться с интернетом (дольше, но меньше выдумок)")
+        self.web.set_active(True)
+        row.append(self.web)
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        row.append(spacer)
+        self.cancel_btn = button("Отменить", lambda _b: self._cancel_run(), "btn-danger")
+        self.cancel_btn.set_sensitive(False)
+        row.append(self.cancel_btn)
+        self.go_btn = button("Новые рекомендации", lambda _b: self._start_run(), "btn-accent")
+        row.append(self.go_btn)
+        card.append(row)
+        page.append(card)
+
+        page.append(eyebrow("ХОД ПОДБОРА"))
+        self.log = Gtk.Label(label="Готов. Каждый запуск идёт через CLI claude — по твоей "
+                                  "подписке, без отдельных токенов.", xalign=0, yalign=0, wrap=True)
+        self.log.add_css_class("log")
+        self.log.set_vexpand(True)
+        frame = scrolled(self.log)
+        frame.add_css_class("frame")
+        page.append(frame)
+        return page
+
+    def _profiles_page(self):
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        page.set_margin_start(18)
+        page.set_margin_end(18)
+        page.set_margin_top(16)
+        page.set_margin_bottom(16)
+
+        switch_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        switch_card.add_css_class("card")
+        switch_card.append(eyebrow("КОМУ СОВЕТУЕМ"))
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.profile_list = Gtk.DropDown.new_from_strings(["—"])
+        self.profile_list.set_hexpand(True)
+        self.profile_list.connect("notify::selected", self._profile_chosen)
+        row.append(self.profile_list)
+        row.append(button("Удалить профиль", lambda _b: self._delete_profile(), "btn-danger"))
+        switch_card.append(row)
+
+        switch_card.append(eyebrow("ЗАМЕТКА О ВКУСАХ — УЙДЁТ В ЗАПРОС"))
+        self.taste = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD)
+        holder = scrolled(self.taste, vexpand=False)
+        holder.set_size_request(-1, 90)
+        holder.add_css_class("frame")
+        switch_card.append(holder)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.append(Gtk.Label(label="Ключ Google Books"))
+        self.google_key = Gtk.Entry(placeholder_text="необязательно — для аннотаций, которых нет в каталогах")
+        self.google_key.set_hexpand(True)
+        row.append(self.google_key)
+        switch_card.append(row)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.append(Gtk.Label(label="ID на FantLab"))
+        self.fantlab_id = Gtk.Entry(placeholder_text="например 208739")
+        row.append(self.fantlab_id)
+        row.append(button("Загрузить оценки", lambda _b: self._import_marks()))
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        row.append(spacer)
+        row.append(button("Сохранить профиль", lambda _b: self._save_profile(), "btn-accent"))
+        switch_card.append(row)
+        page.append(switch_card)
+
+        new_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        new_card.add_css_class("card")
+        new_card.append(eyebrow("НОВЫЙ ЧИТАТЕЛЬ"))
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.new_name = Gtk.Entry(placeholder_text="Имя")
+        self.new_name.set_hexpand(True)
+        row.append(self.new_name)
+        self.new_fantlab = Gtk.Entry(placeholder_text="ID на FantLab (необязательно)")
+        row.append(self.new_fantlab)
+        row.append(button("Создать", lambda _b: self._create_profile(), "btn-accent"))
+        new_card.append(row)
+        note = Gtk.Label(xalign=0, wrap=True, label=(
+            "У каждого профиля своя полка, свои оценки и своя история подбора. "
+            "Подписка Claude при этом одна — общая на всех."))
+        note.add_css_class("subtle")
+        new_card.append(note)
+        page.append(new_card)
+
+        self.profile_stats = Gtk.Label(label="", xalign=0, yalign=0, wrap=True)
+        self.profile_stats.add_css_class("log")
+        self.profile_stats.set_vexpand(True)
+        page.append(self.profile_stats)
+        return page
+
+    # refresh ----------------------------------------------------------------
+
+    def refresh(self):
+        books = self.profile.books
+        rated = self.profile.rated()
+        self.summary.set_text("%d книг · %d оценено · %d в подборке"
+                              % (len(books), len(rated), len(self.profile.by_status("recommended"))))
+        self.who.set_text(self.profile.name.upper())
+
+        wanted = ["recommended", "reading", "skipped", None][self.shelf_filter.get_selected()]
+        shelf = [b for b in books if wanted is None or b.get("status") == wanted]
+        shelf.sort(key=lambda b: (not b.get("verified"), b.get("added") or ""), reverse=False)
+        self.shelf.fill(self, shelf, self,
+                        "Пусто. Загляни во вкладку «Подбор» и нажми «Новые рекомендации».")
+
+        query = norm(self.ratings_search.get_text())
+        listing = [b for b in rated
+                   if not query or query in norm(b.get("title")) or query in norm(b.get("author"))]
+        sort = self.ratings_sort.get_selected()
+        if sort == 0:
+            listing.sort(key=lambda b: -(b.get("my_rating") or 0))
+        elif sort == 1:
+            listing.sort(key=lambda b: (b.get("my_rating") or 99))
+        elif sort == 2:
+            listing.sort(key=lambda b: norm(b.get("author")))
+        else:
+            listing.sort(key=lambda b: (b.get("rated") or b.get("added") or ""), reverse=True)
+        self.ratings.fill(self, listing, self,
+                          "Оценок пока нет. Открой книгу с полки и поставь оценку.")
+
+        self._refresh_profiles()
+
+    def _refresh_profiles(self):
+        self.profile_paths = Profile.all()
+        names = []
+        for path in self.profile_paths:
+            try:
+                names.append(json.loads(path.read_text("utf-8")).get("name", path.stem))
+            except Exception:
+                names.append(path.stem)
+        model = Gtk.StringList.new(names or ["—"])
+        self.profile_list.handler_block_by_func(self._profile_chosen)
+        self.profile_list.set_model(model)
+        if self.profile.path in self.profile_paths:
+            self.profile_list.set_selected(self.profile_paths.index(self.profile.path))
+        self.profile_list.handler_unblock_by_func(self._profile_chosen)
+
+        runs = self.profile.data.get("runs", [])
+        marks = [b["my_rating"] for b in self.profile.books if b.get("my_rating")]
+        lines = ["Файл профиля: %s" % self.profile.path,
+                 "Книг: %d · оценок: %d · средняя: %s"
+                 % (len(self.profile.books), len(marks),
+                    ("%.2f" % (sum(marks) / len(marks))) if marks else "—"),
+                 "Подборок заказано: %d" % len(runs)]
+        for run in runs[-6:][::-1]:
+            lines.append("  %s · %s · %d книг%s"
+                         % (run.get("ts", ""), run.get("model", ""), run.get("count", 0),
+                            (" · «%s»" % run["ask"][:60]) if run.get("ask") else ""))
+        self.profile_stats.set_text("\n".join(lines))
+
+    def save_and_refresh(self):
+        self.profile.save()
+        self.refresh()
+
+    # profile actions --------------------------------------------------------
+
+    def _profile_chosen(self, dropdown, _param):
+        index = dropdown.get_selected()
+        if 0 <= index < len(self.profile_paths) and self.profile_paths[index] != self.profile.path:
+            self.switch_profile(self.profile_paths[index])
+
+    def _save_profile(self):
+        buf = self.taste.get_buffer()
+        self.profile.data["taste_note"] = buf.get_text(buf.get_start_iter(),
+                                                       buf.get_end_iter(), False).strip()
+        self.profile.data["fantlab_user_id"] = self.fantlab_id.get_text().strip()
+        self.profile.data["google_books_key"] = self.google_key.get_text().strip()
+        self.save_and_refresh()
+
+    def _create_profile(self):
+        name = self.new_name.get_text().strip()
+        if not name:
+            return
+        profile = Profile.create(name, self.new_fantlab.get_text().strip())
+        self.new_name.set_text("")
+        self.new_fantlab.set_text("")
+        self.switch_profile(profile.path)
+
+    def _delete_profile(self):
+        if len(Profile.all()) < 2:
+            return
+        doomed = self.profile.path
+        remaining = [p for p in Profile.all() if p != doomed]
+        doomed.unlink(missing_ok=True)
+        self.switch_profile(remaining[0])
+
+    def _import_marks(self):
+        user_id = self.fantlab_id.get_text().strip()
+        if not user_id:
+            return
+        self.profile.data["fantlab_user_id"] = user_id
+        self.profile.save()
+        self._log("FantLab: тяну оценки пользователя %s…" % user_id)
+        self.busy("FantLab: оценки")
+
+        def work():
+            def note(text):
+                GLib.idle_add(self._log, "FantLab: " + text)
+                GLib.idle_add(self.busy, "FantLab: " + text)
+
+            try:
+                added = import_fantlab_marks(self.profile, user_id, note)
+                GLib.idle_add(self._log, "FantLab: добавлено книг — %d" % added)
+            except Exception as exc:
+                GLib.idle_add(self._log, "FantLab: не вышло — %s" % exc)
+            GLib.idle_add(self.busy)
+            GLib.idle_add(self.refresh)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    # enrichment -------------------------------------------------------------
+
+    def refresh_plan(self):
+        """What this launch should look at: everything still missing a card, and
+        a slice of what simply has not been checked in a while."""
+        now = time.time()
+
+        def hours_since(book):
+            try:
+                return (now - time.mktime(time.strptime(book["checked_at"], "%Y-%m-%d %H:%M"))) / 3600
+            except Exception:
+                return 1e9                                  # never checked
+
+        missing, stale = [], []
+        for book in self.profile.books:
+            if book.get("status") == "skipped":
+                continue
+            incomplete = (not book.get("verified") or not book.get("cover_url")
+                          or not book.get("annotation"))
+            if incomplete:
+                if hours_since(book) >= RETRY_AFTER_HOURS:
+                    missing.append(book)
+            elif hours_since(book) >= STALE_AFTER_DAYS * 24:
+                stale.append(book)
+        stale.sort(key=lambda b: b.get("checked_at") or "")
+        return missing, stale[:STALE_PER_LAUNCH]
+
+    def _enrich_one(self, book):
+        """Everything one book still needs, from whichever catalogue has it."""
+        key = self.profile.data.get("google_books_key", "")
+        if book.get("verified") and book.get("fantlab_work_id"):
+            for field, value in fantlab_fill(book["fantlab_work_id"],
+                                             book.get("author", "")).items():
+                if value and not book.get(field):
+                    book[field] = value
+        if not book.get("verified") or not book.get("cover_url") or not book.get("annotation"):
+            facts = resolve(book.get("title", ""), book.get("author", ""),
+                            book.get("lang", "ru"), key)
+            if book.get("verified"):
+                # Identity is already settled; take only what is still blank.
+                for field in ("cover_url", "cover_candidates", "annotation", "annotation_from"):
+                    book[field] = book.get(field) or facts.get(field)
+            else:
+                book.update(catalogued(book, facts))
+        book["enrich_tried"] = True
+        book["checked_at"] = time.strftime("%Y-%m-%d %H:%M")
+        cover_path(book)
+        if not book.get("cover_url"):
+            # Whether a picture is usable is only known once it is downloaded,
+            # so this is the place to ask what else the author has: an omnibus
+            # filed with a reader's photograph leaves the book confirmed and
+            # coverless, and the window can then offer the separate volumes.
+            book["neighbours"] = openlibrary_neighbours(book.get("title", ""),
+                                                        book.get("author", ""))
+        return book
+
+    def _refresh_on_launch(self):
+        """Catch up cheaply at startup: pull new marks, fill what is missing,
+        then revalidate a few old entries with conditional requests that
+        usually download nothing at all."""
+        missing, stale = self.refresh_plan()
+        user_id = self.profile.data.get("fantlab_user_id", "")
+        if not missing and not stale and not user_id:
+            return False
+        total = len(missing) + len(stale)
+        self._log("Обновление: %d без карточки, %d на проверку" % (len(missing), len(stale)))
+        self.busy("проверяю изменения", 0, total)
+
+        def work():
+            if user_id:
+                GLib.idle_add(self.busy, "FantLab: новые оценки", 0, total)
+                added, changed = sync_fantlab_marks(self.profile, user_id)
+                if added or changed:
+                    GLib.idle_add(self._log, "FantLab: новых книг %d, оценок изменилось %d"
+                                  % (added, changed))
+                    GLib.idle_add(self.save_and_refresh)
+
+            done = 0
+            for book in missing:
+                GLib.idle_add(self.busy, book.get("title", "")[:40], done, total)
+                self._enrich_one(book)
+                done += 1
+                if done % 10 == 0:
+                    GLib.idle_add(self.save_and_refresh)
+
+            fresh = 0
+            for book in stale:
+                GLib.idle_add(self.busy, book.get("title", "")[:40], done, total)
+                if refresh_cover(book):
+                    fresh += 1
+                book["checked_at"] = time.strftime("%Y-%m-%d %H:%M")
+                done += 1
+            GLib.idle_add(self._log, "Обновление закончено, обложек обновилось: %d" % fresh)
+            GLib.idle_add(self.save_and_refresh)
+            GLib.idle_add(self.busy)
+
+        threading.Thread(target=work, daemon=True).start()
+        return False
+
+    def enrich_pending(self, only_untried):
+        """Books still missing a catalogue card: either never resolved at all,
+        or imported from a marks list, which carries no cover for cycles and no
+        annotation for anything. On launch we only look at the ones nobody has
+        tried yet, so a title that genuinely does not exist is not re-queried on
+        every start."""
+        out = []
+        for book in self.profile.books:
+            if book.get("status") == "skipped":
+                continue
+            if only_untried and book.get("enrich_tried"):
+                continue
+            if not book.get("verified"):
+                out.append(book)
+            elif (book.get("fantlab_work_id") and not book.get("enrich_tried")
+                  and not (book.get("cover_url") and book.get("annotation"))):
+                out.append(book)
+        return out
+
+    def _enrich_shelf(self, only_untried=False):
+        pending = self.enrich_pending(only_untried)
+        if not pending:
+            if not only_untried:
+                self._log("Все книги на полке уже подтверждены.")
+            return
+        self._log("Дозагружаю карточки: %d книг…" % len(pending))
+        self.busy("обложки и аннотации", 0, len(pending))
+        self.enrich_btn.set_sensitive(False)
+
+        def work():
+            done = 0
+            for book in pending:
+                GLib.idle_add(self.busy, book.get("title", "")[:40], done, len(pending))
+                self._enrich_one(book)
+                note = "найдено" if book.get("verified") else "нет в каталогах"
+                if book.get("verified") and not book.get("cover_url"):
+                    note = "карточка есть, обложки нет ни в одном каталоге"
+                done += 1
+                GLib.idle_add(self._log, "  %s — %s" % (book.get("title", ""), note))
+                if done % 20 == 0:
+                    GLib.idle_add(self.save_and_refresh)
+            GLib.idle_add(self.save_and_refresh)
+            GLib.idle_add(self.busy)
+            GLib.idle_add(self.enrich_btn.set_sensitive, True)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    # generation -------------------------------------------------------------
+
+    def busy(self, text="", done=0, total=0):
+        """Show progress in the top bar. No text ends the run and hides the bar."""
+        self.progress_text.set_text(("%d/%d · %s" % (done, total, text)) if total else text)
+        self.progress.set_visible(bool(text))
+        if total:
+            self.progress.set_fraction(min(1.0, done / total))
+        elif text:
+            self.progress.pulse()
+        return False
+
+    def _log(self, text):
+        stamp = time.strftime("%H:%M:%S")
+        self.log.set_text((self.log.get_text() + "\n%s  %s" % (stamp, text)).strip())
+
+    def _cancel_run(self):
+        if self.run_job:
+            self.run_job.cancel()
+            self._log("Отменяю…")
+
+    def _start_run(self):
+        if self.run_job:
+            return
+        buf = self.ask.get_buffer()
+        ask = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).strip()
+        count = int(["3", "5", "8", "12"][self.count.get_selected()])
+        model = MODELS[self.model.get_selected()][1]
+        web = self.web.get_active()
+
+        self.config["last_ask"] = ask
+        self._save_config()
+
+        prompt = build_prompt(self.profile, ask, count)
+        self.run_job = ClaudeRun(prompt, model, web)
+        self.go_btn.set_sensitive(False)
+        self.cancel_btn.set_sensitive(True)
+        self._log("Спрашиваю Claude (%s%s), это занимает от минуты…"
+                  % (model, ", со сверкой в интернете" if web else ""))
+        self.busy("Claude подбирает книги")
+        GLib.timeout_add(700, lambda: self.run_job is not None and (self.progress.pulse() or True))
+
+        def work():
+            books, error = self.run_job.run()
+            if error:
+                GLib.idle_add(self._finish_run, [], error)
+                return
+            GLib.idle_add(self._log, "Пришло названий: %d. Проверяю по каталогам…" % len(books))
+            resolved = []
+            for number, item in enumerate(books):
+                GLib.idle_add(self.busy, item["title"][:40], number, len(books))
+                if self.run_job.cancelled:
+                    break
+                if self.profile.knows(item["title"], item["author"]):
+                    GLib.idle_add(self._log, "  %s — уже на полке, пропускаю" % item["title"])
+                    continue
+                facts = resolve(item["title"], item["author"], item["lang"],
+                                self.profile.data.get("google_books_key", ""))
+                book = dict(item)
+                book.update(catalogued(item, facts))
+                resolved.append(book)
+                GLib.idle_add(self._log, "  %s — %s" % (
+                    item["title"],
+                    "%s, оценка %s" % (facts["source"], facts.get("public_rating") or "—")
+                    if facts["verified"] else "НЕ НАЙДЕНО в каталогах, помечаю как непроверенное"))
+                book["id"] = uuid.uuid4().hex[:12]
+                cover_path(book)
+            GLib.idle_add(self._finish_run, resolved, "")
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _finish_run(self, books, error):
+        job, self.run_job = self.run_job, None
+        self.busy()
+        self.go_btn.set_sensitive(True)
+        self.cancel_btn.set_sensitive(False)
+
+        if error:
+            self._log("Ошибка: " + error)
+            return
+        if job and job.cancelled:
+            self._log("Отменено.")
+            return
+
+        for book in books:
+            saved = self.profile.add(book)
+            threading.Thread(target=cover_path, args=(saved,), daemon=True).start()
+        buf = self.ask.get_buffer()
+        self.profile.data.setdefault("runs", []).append({
+            "ts": time.strftime("%Y-%m-%d %H:%M"),
+            "ask": buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).strip(),
+            "model": MODELS[self.model.get_selected()][1],
+            "count": len(books),
+        })
+        self.save_and_refresh()
+        verified = sum(1 for b in books if b.get("verified"))
+        self._log("Готово: %d книг на полке, из них подтверждено %d." % (len(books), verified))
+        self.stack.set_visible_child_name("shelf")
+
+
+class App(Gtk.Application):
+    def __init__(self, start_tab="shelf"):
+        super().__init__(application_id=APP_ID)
+        self.start_tab = start_tab
+
+    def do_activate(self):
+        provider = Gtk.CssProvider()
+        provider.load_from_data(CSS.encode("utf-8"))
+        # A user's own gtk.css is loaded at APPLICATION priority; go above it so
+        # a ricing setup cannot repaint half of this window.
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+        window = Bookshelf(self)
+        window.stack.set_visible_child_name(self.start_tab)
+        window.present()
+
+
+if __name__ == "__main__":
+    # --discover opens straight on the picker: the desktop file offers it as a
+    # right-click action, so "ask for new books" is one gesture from the dock.
+    import sys
+    App("discover" if "--discover" in sys.argv else "shelf").run(None)
