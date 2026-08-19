@@ -11,7 +11,9 @@ file and touches nothing else, so no wallpaper you already kept can be damaged
 by anything this app does.
 
 The window never closes on Save or Delete — it advances to the next frame in
-the reel, which is prefetched in the background so the wait is invisible.
+the reel, which is prefetched in the background so the wait is invisible. How
+far ahead depends on the source: Pixabay fetches one frame at a time because
+its terms ask for that, the others keep a deeper buffer.
 """
 import gi
 
@@ -19,6 +21,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 
+import hashlib
 import http.client
 import json
 import os
@@ -27,6 +30,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -39,6 +43,12 @@ from gi.repository import GdkPixbuf, Gdk, GLib, Gtk
 SAVE_DIR = Path.home() / "random_wallpaper"
 
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "random-wallpaper"
+# API answers, kept apart from the pending downloads so pruning one cannot
+# touch the other.
+API_CACHE_DIR = CACHE_DIR / "api"
+API_CACHE_TTL = 24 * 60 * 60   # Pixabay requires identical requests to be
+                               # cached for 24 hours; the other APIs are only
+                               # spared needless load by the same rule.
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "random-wallpaper"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
@@ -49,19 +59,17 @@ USER_AGENT = (
 )
 
 TIMEOUT = 30
-REEL_AHEAD = 9          # frames kept downloaded ahead of the current one
+REEL_AHEAD = 6          # frames kept downloaded ahead of the current one
+# Pixabay is the exception: its terms want each request to answer a person
+# looking at a picture rather than a queue filling itself, so its reel holds
+# the current frame and exactly one more.
+REEL_AHEAD_BY_SOURCE = {"pixabay": 1}
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")
 
 ORIENTATIONS = [
     ("Any", "any"),
     ("Landscape", "landscape"),
     ("Portrait", "portrait"),
-]
-
-RATINGS = [
-    ("Safe", "safe"),
-    ("Sketchy", "sketchy"),
-    ("18+", "nsfw"),
 ]
 
 MINIMUMS = [
@@ -74,14 +82,21 @@ MINIMUMS = [
 DEFAULTS = {
     "source": "konachan",
     "orientation": "any",
-    "rating": "safe",
     "minimum": "1920x1080",
     "wallhaven_general": True,
     "wallhaven_anime": True,
     "wallhaven_people": False,
     "wallhaven_apikey": "",
+    "pixabay_apikey": "",
     "set_on_save": True,
 }
+
+# Pixabay caps a search at 500 accessible results, and these are the categories
+# worth a wallpaper — a random one per request is what keeps the pool wide.
+PIXABAY_CATEGORIES = ("backgrounds", "nature", "places", "animals", "travel",
+                      "buildings", "science", "transportation")
+PIXABAY_PER_PAGE = 50
+PIXABAY_FALLBACK_EDGE = 1280   # largeImageURL without approved full API access
 
 
 class FetchError(Exception):
@@ -93,9 +108,12 @@ class FetchError(Exception):
 def load_prefs():
     prefs = dict(DEFAULTS)
     try:
-        prefs.update(json.loads(CONFIG_FILE.read_text()))
+        stored = json.loads(CONFIG_FILE.read_text())
     except (OSError, ValueError):
-        pass
+        return prefs
+    # Only known keys: a config written by an older version still carries
+    # "rating", which nothing reads any more.
+    prefs.update({k: v for k, v in stored.items() if k in DEFAULTS})
     return prefs
 
 
@@ -108,10 +126,19 @@ def save_prefs(prefs):
         pass
 
 
+def reel_ahead(prefs):
+    return REEL_AHEAD_BY_SOURCE.get(prefs["source"], REEL_AHEAD)
+
+
 def wallhaven_key(prefs):
     """Environment first, so the key can live in fish's gitignored secrets.fish
     rather than in a config file."""
     return os.environ.get("WALLHAVEN_API_KEY", "").strip() or prefs["wallhaven_apikey"].strip()
+
+
+def pixabay_key(prefs):
+    """Pixabay's API key — same environment-first rule as wallhaven's."""
+    return os.environ.get("PIXABAY_API_KEY", "").strip() or prefs["pixabay_apikey"].strip()
 
 
 # ── sources ─────────────────────────────────────────────────────────────────
@@ -130,8 +157,33 @@ def _get(url, attempts=3):
     raise last
 
 
-def _get_json(url):
-    return json.loads(_get(url))
+def _get_json(url, ttl=API_CACHE_TTL):
+    """Answers are cached on disk by URL for a day.
+
+    Pixabay's full-access terms require exactly this — an identical request
+    must not be repeated within 24 hours — and since every source here asks for
+    a random page or date, a cache hit is the uncommon case anyway rather than
+    something that would make the reel repeat itself.
+
+    Only the parsed answer is stored, never the URL: it carries the API key.
+    """
+    slot = API_CACHE_DIR / (hashlib.sha256(url.encode()).hexdigest() + ".json")
+    try:
+        if time.time() - slot.stat().st_mtime < ttl:
+            return json.loads(slot.read_text())
+    except (OSError, ValueError):
+        pass          # missing, unreadable or half-written: just fetch it
+
+    parsed = json.loads(_get(url))
+    try:
+        API_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=API_CACHE_DIR, suffix=".part")
+        with os.fdopen(fd, "w") as fh:
+            json.dump(parsed, fh)
+        os.replace(tmp, slot)          # atomic: a reader never sees a partial
+    except (OSError, ValueError):
+        pass          # an uncacheable answer is still a usable one
+    return parsed
 
 
 def _min_size(prefs):
@@ -155,22 +207,14 @@ def _fits(prefs, width, height):
 
 
 def pick_konachan(prefs):
-    """Safe posts come from konachan.net; anything above Safe needs konachan.com.
-
-    What .com serves depends on where you connect from — on some routes it
-    answers 302 to konachan.net, which indexes safe posts only, so a non-safe
-    search comes back empty. The request is made either way and the empty case
-    explains itself, rather than being refused up front.
+    """konachan.net indexes safe posts only, which is the whole catalogue this
+    app offers — .com and the ratings above Safe are deliberately not wired up.
 
     The API has no random endpoint, so we jump to a random page and filter
     locally — hence limit=40 rather than 1.
     """
-    host = "konachan.net" if prefs["rating"] == "safe" else "konachan.com"
-    tags = {
-        "safe": "rating:safe",
-        "sketchy": "rating:questionable",
-        "nsfw": "rating:explicit",
-    }[prefs["rating"]]
+    host = "konachan.net"
+    tags = "rating:safe"
 
     page = random.randint(1, 200)
     url = (
@@ -178,12 +222,6 @@ def pick_konachan(prefs):
         f"&limit=40&page={page}"
     )
     posts = _get_json(url)
-    if not posts and prefs["rating"] != "safe":
-        raise FetchError(
-            f"konachan.com returned nothing for {tags}. From some networks it "
-            "answers 302 to konachan.net, which indexes safe posts only — a VPN "
-            "changes what you get. Wallhaven is the reliable source above Safe."
-        )
     if not posts:
         raise FetchError(f"konachan page {page} came back empty — try again")
 
@@ -217,17 +255,11 @@ def pick_wallhaven(prefs):
     if categories == "000":
         raise FetchError("every wallhaven category is switched off")
 
-    purity = {"safe": "100", "sketchy": "110", "nsfw": "111"}[prefs["rating"]]
     key = wallhaven_key(prefs)
-    if prefs["rating"] == "nsfw" and not key:
-        raise FetchError(
-            "wallhaven only serves 18+ results to an account. Put your API key "
-            "in Settings, or set WALLHAVEN_API_KEY."
-        )
 
     params = {
         "sorting": "random",
-        "purity": purity,
+        "purity": "100",
         "categories": categories,
     }
     if prefs["minimum"]:
@@ -256,11 +288,122 @@ def pick_wallhaven(prefs):
     }
 
 
+def _pixabay_download(hit):
+    """The URL this key may actually fetch, and the size it will really be.
+
+    `imageURL`/`fullHDURL` are the originals, and Pixabay only sends them to
+    accounts approved for full API access. Everyone else gets `largeImageURL`,
+    which is the image scaled to 1280 px on its long edge — so the dimensions
+    to judge are the scaled ones, not the `imageWidth`/`imageHeight` of an
+    original that cannot be downloaded.
+    """
+    for field in ("imageURL", "fullHDURL"):
+        if hit.get(field):
+            return hit[field], hit.get("imageWidth"), hit.get("imageHeight"), True
+
+    url = hit.get("largeImageURL")
+    width, height = hit.get("imageWidth"), hit.get("imageHeight")
+    if url and width and height:
+        scale = min(1.0, PIXABAY_FALLBACK_EDGE / max(width, height))
+        width, height = int(width * scale), int(height * scale)
+    return url, width, height, False
+
+
+def pick_pixabay(prefs):
+    """Pixabay photography — no anime, and no rule against a wallpaper app,
+    which is why it is here and Unsplash and Pexels are not: both forbid this
+    kind of application outright in their API guidelines.
+
+    A search exposes at most 500 results, so the pool comes from picking a
+    random category and a random page within it rather than from one big query.
+    """
+    key = pixabay_key(prefs)
+    if not key:
+        raise FetchError(
+            "pixabay needs a free API key: sign in at pixabay.com, then take "
+            "it from pixabay.com/api/docs and put it in Filters — or set "
+            "PIXABAY_API_KEY."
+        )
+
+    params = {
+        "key": key,
+        "image_type": "photo",
+        "safesearch": "true",
+        "order": random.choice(("popular", "latest")),
+        "category": random.choice(PIXABAY_CATEGORIES),
+        "per_page": PIXABAY_PER_PAGE,
+        "page": random.randint(1, 500 // PIXABAY_PER_PAGE),
+        # Documented as the way to see whether this key has full API access;
+        # ignored for keys that do not, which is exactly the fallback below.
+        "response_group": "high_resolution",
+    }
+    if prefs["minimum"]:
+        min_w, min_h = _min_size(prefs)
+        params["min_width"], params["min_height"] = min_w, min_h
+    if prefs["orientation"] == "landscape":
+        params["orientation"] = "horizontal"
+    elif prefs["orientation"] == "portrait":
+        params["orientation"] = "vertical"
+
+    def search():
+        url = "https://pixabay.com/api/?" + urllib.parse.urlencode(params)
+        try:
+            return _get_json(url).get("hits") or []
+        except urllib.error.HTTPError as exc:
+            if exc.code in (400, 401, 403):
+                raise FetchError(
+                    "pixabay rejected the key — check it at "
+                    "pixabay.com/api/docs, or wait out the "
+                    "100-requests-a-minute limit."
+                ) from exc
+            raise
+
+    hits = search()
+    if not hits and params["page"] > 1:
+        # A narrow category under a size filter can hold fewer than one page,
+        # and then every page but the first is empty by construction.
+        params["page"] = 1
+        hits = search()
+    if not hits:
+        raise FetchError(
+            f"pixabay has nothing in {params['category']} at this size — try "
+            "again for another category"
+        )
+
+    candidates = [_pixabay_download(h) for h in hits]
+    usable = [(h, c) for h, c in zip(hits, candidates)
+              if c[0] and _fits(prefs, c[1], c[2])]
+    if not usable:
+        if not any(c[3] for c in candidates):
+            raise FetchError(
+                f"none of the {len(hits)} pixabay photos survive the size "
+                f"filter: without approved full API access the key may only "
+                f"download the {PIXABAY_FALLBACK_EDGE}px copy, whatever the "
+                "original measures. Lower the minimum size, or ask Pixabay for "
+                "full API access at pixabay.com/api/docs."
+            )
+        raise FetchError(
+            f"none of the {len(hits)} pixabay photos match the size filter"
+        )
+
+    hit, (file_url, width, height, _) = random.choice(usable)
+    return {
+        "url": file_url,
+        "name": f"pixabay-{hit.get('id', 'x')}",
+        "width": width,
+        "height": height,
+        "credit": hit.get("user") or "pixabay.com",
+        "source": "Pixabay",
+    }
+
+
 # The osu! seasonal-backgrounds endpoint the old shell script used now answers
 # 403 — it went behind OAuth — so wallhaven takes its place as second source.
+# Pixabay is the photographic one: no anime at all.
 SOURCES = [
     ("Konachan", "konachan", pick_konachan),
     ("Wallhaven", "wallhaven", pick_wallhaven),
+    ("Pixabay", "pixabay", pick_pixabay),
 ]
 
 
@@ -313,6 +456,14 @@ def prune_cache():
     for stale in CACHE_DIR.glob("pending-*"):
         try:
             stale.unlink()
+        except OSError:
+            pass
+
+    cutoff = time.time() - API_CACHE_TTL
+    for stale in API_CACHE_DIR.glob("*"):
+        try:
+            if stale.stat().st_mtime < cutoff:
+                stale.unlink()
         except OSError:
             pass
 
@@ -507,17 +658,15 @@ class Settings(Gtk.Window):
                                      self._pos(ORIENTATIONS, prefs["orientation"]))
         self.minimum = self._row(grid, 2, "MINIMUM SIZE", [m[0] for m in MINIMUMS],
                                  self._pos(MINIMUMS, prefs["minimum"]))
-        self.rating = self._row(grid, 3, "RATING", [r[0] for r in RATINGS],
-                                self._pos(RATINGS, prefs["rating"]))
-
-        self.rating_hint = Gtk.Label(xalign=0, wrap=True)
-        self.rating_hint.add_css_class("hint")
-        grid.attach(self.rating_hint, 0, 4, 2, 1)
+        self.source_hint = Gtk.Label(xalign=0, wrap=True)
+        self.source_hint.add_css_class("hint")
+        grid.attach(self.source_hint, 0, 3, 2, 1)
 
         # ── wallhaven-only ──────────────────────────────────────────────────
         wh = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         wh.add_css_class("card")
         root.append(wh)
+        self.wallhaven_card = wh
         wh.append(eyebrow("WALLHAVEN CATEGORIES"))
 
         cats = Gtk.Box(spacing=16)
@@ -529,17 +678,33 @@ class Settings(Gtk.Window):
             c.connect("toggled", lambda *_: self.apply())
             cats.append(c)
 
-        wh.append(eyebrow("API KEY — ONLY NEEDED FOR 18+"))
+        wh.append(eyebrow("API KEY — NOT NEEDED FOR THESE FILTERS"))
         self.apikey = Gtk.Entry(text=prefs["wallhaven_apikey"],
                                 placeholder_text="wallhaven.cc/settings/account")
         self.apikey.set_visibility(False)
         self.apikey.connect("changed", lambda *_: self.apply())
         wh.append(self.apikey)
 
-        env_key = os.environ.get("WALLHAVEN_API_KEY", "").strip()
-        if env_key:
+        if os.environ.get("WALLHAVEN_API_KEY", "").strip():
             self.apikey.set_sensitive(False)
             self.apikey.set_placeholder_text("taken from WALLHAVEN_API_KEY")
+
+        # ── pixabay-only ────────────────────────────────────────────────────
+        px = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        px.add_css_class("card")
+        root.append(px)
+        self.pixabay_card = px
+        px.append(eyebrow("PIXABAY API KEY — REQUIRED"))
+        self.pixabay_apikey = Gtk.Entry(
+            text=prefs["pixabay_apikey"],
+            placeholder_text="pixabay.com/api/docs")
+        self.pixabay_apikey.set_visibility(False)
+        self.pixabay_apikey.connect("changed", lambda *_: self.apply())
+        px.append(self.pixabay_apikey)
+
+        if os.environ.get("PIXABAY_API_KEY", "").strip():
+            self.pixabay_apikey.set_sensitive(False)
+            self.pixabay_apikey.set_placeholder_text("taken from PIXABAY_API_KEY")
 
         close = Gtk.Button(label="Done")
         close.add_css_class("btn")
@@ -566,30 +731,47 @@ class Settings(Gtk.Window):
         return drop
 
     def refresh_hint(self):
-        rating = RATINGS[self.rating.get_selected()][1]
+        """Every source gets its own sentence, and only its own controls — a
+        wallhaven category means nothing while Konachan is selected."""
         source = SOURCES[self.source.get_selected()][1]
-        if rating == "nsfw" and source == "wallhaven" and not wallhaven_key(self.prefs):
-            self.rating_hint.set_text(
-                "Wallhaven serves 18+ results only with an API key — add one below."
-            )
-        elif rating != "safe" and source == "konachan":
-            self.rating_hint.set_text(
-                "Above Safe, Konachan uses konachan.com — which some networks "
-                "redirect to the safe-only mirror. Wallhaven always works."
-            )
+        self.wallhaven_card.set_visible(source == "wallhaven")
+        self.pixabay_card.set_visible(source == "pixabay")
+
+        if source == "konachan":
+            hint = "Anime art, safe posts only. No server-side size filter, so "\
+                   "40 candidates are fetched and one that fits is picked."
+        elif source == "wallhaven":
+            hint = "Mixed; untick Anime below for photographs only. Filters "\
+                   "apply server-side."
+        elif source == "pixabay":
+            capped = max(_min_size(self.prefs)) > PIXABAY_FALLBACK_EDGE
+            if not pixabay_key(self.prefs):
+                hint = "Pixabay photography, no anime. Needs a free API key — "\
+                       "add one below."
+            elif capped:
+                hint = ("Pixabay photography, no anime. Until Pixabay approves "
+                        f"full API access a key may only download the "
+                        f"{PIXABAY_FALLBACK_EDGE}px copy, which cannot pass "
+                        "this minimum size — set Any size, or expect nothing "
+                        "back.")
+            else:
+                hint = ("Pixabay photography, no anime. Without approved full "
+                        f"API access the download is the {PIXABAY_FALLBACK_EDGE}"
+                        "px copy, whatever the original measures.")
         else:
-            self.rating_hint.set_text("")
+            hint = ""
+        self.source_hint.set_text(hint)
 
     def apply(self):
         self.prefs.update({
             "source": SOURCES[self.source.get_selected()][1],
             "orientation": ORIENTATIONS[self.orientation.get_selected()][1],
             "minimum": MINIMUMS[self.minimum.get_selected()][1],
-            "rating": RATINGS[self.rating.get_selected()][1],
             "wallhaven_general": self.cat_general.get_active(),
             "wallhaven_anime": self.cat_anime.get_active(),
             "wallhaven_people": self.cat_people.get_active(),
             "wallhaven_apikey": self.apikey.get_text(),
+            "pixabay_apikey": self.pixabay_apikey.get_text(),
         })
         save_prefs(self.prefs)
         self.refresh_hint()
@@ -735,8 +917,9 @@ class Reel(Gtk.ApplicationWindow):
 
     # ── the reel ────────────────────────────────────────────────────────────
     def top_up(self):
-        """Keep REEL_AHEAD frames downloaded past the current one."""
-        want = self.index + 1 + REEL_AHEAD - len(self.frames) - self.inflight
+        """Keep this source's share of frames downloaded past the current one."""
+        want = (self.index + 1 + reel_ahead(self.prefs)
+                - len(self.frames) - self.inflight)
         for _ in range(max(0, want)):
             self.inflight += 1
             prefs = dict(self.prefs)
@@ -844,7 +1027,12 @@ class Reel(Gtk.ApplicationWindow):
         orientation = dict((v, k) for k, v in ORIENTATIONS)[self.prefs["orientation"]]
         bits.append(orientation.upper())
         bits.append(dict((v, k) for k, v in MINIMUMS)[self.prefs["minimum"]].upper())
-        bits.append(dict((v, k) for k, v in RATINGS)[self.prefs["rating"]].upper())
+        if self.prefs["source"] == "wallhaven":
+            cats = [name for name, key in (("GENERAL", "wallhaven_general"),
+                                           ("ANIME", "wallhaven_anime"),
+                                           ("PEOPLE", "wallhaven_people"))
+                    if self.prefs[key]]
+            bits.append("+".join(cats) or "NO CATEGORIES")
         self.filter_summary.set_text("  ·  ".join(bits))
 
     def sync(self):

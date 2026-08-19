@@ -30,6 +30,7 @@ os.environ["HOME"] = str(FAKE)
 os.environ["XDG_CACHE_HOME"] = str(FAKE / ".cache")
 os.environ["XDG_CONFIG_HOME"] = str(FAKE / ".config")
 os.environ.pop("WALLHAVEN_API_KEY", None)
+os.environ.pop("PIXABAY_API_KEY", None)
 
 loader = importlib.machinery.SourceFileLoader("rw", str(APP))
 spec = importlib.util.spec_from_loader("rw", loader)
@@ -65,6 +66,20 @@ check("config key used when env is unset", rw.wallhaven_key(prefs) == "secret-ke
 os.environ["WALLHAVEN_API_KEY"] = "env-key"
 check("WALLHAVEN_API_KEY overrides config", rw.wallhaven_key(prefs) == "env-key")
 del os.environ["WALLHAVEN_API_KEY"]
+os.environ["PIXABAY_API_KEY"] = "env-pixabay"
+check("PIXABAY_API_KEY overrides config",
+      rw.pixabay_key(dict(prefs, pixabay_apikey="cfg")) == "env-pixabay")
+del os.environ["PIXABAY_API_KEY"]
+rw.CONFIG_FILE.unlink()
+
+# ── ratings are gone: a config written by an older version must not revive
+# them, and nothing may read prefs["rating"] any more ────────────────────────
+check("no rating in defaults", "rating" not in rw.DEFAULTS)
+rw.CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+rw.CONFIG_FILE.write_text(json.dumps({"rating": "nsfw", "orientation": "portrait"}))
+stale = rw.load_prefs()
+check("old rating dropped on load", "rating" not in stale)
+check("other keys of an old config survive", stale["orientation"] == "portrait")
 rw.CONFIG_FILE.unlink()
 
 # ── filters ─────────────────────────────────────────────────────────────────
@@ -79,13 +94,25 @@ check("minimum size rejects a small image", not rw._fits(land, 1280, 720))
 check("Any size accepts a small image", rw._fits(anysize, 640, 480))
 check("unknown dimensions pass through", rw._fits(land, None, None))
 
-# ── the 18+ gate is an error, not a silent empty result ─────────────────────
+# ── a missing key is an error that says where to get one ────────────────────
 try:
-    rw.pick_wallhaven(dict(rw.DEFAULTS, source="wallhaven", rating="nsfw",
-                           wallhaven_apikey=""))
-    check("wallhaven 18+ without a key raises", False)
+    rw.pick_pixabay(dict(rw.DEFAULTS, source="pixabay", pixabay_apikey=""))
+    check("pixabay without a key raises", False)
 except rw.FetchError as exc:
-    check("wallhaven 18+ without a key raises", "API key" in str(exc))
+    check("pixabay without a key raises", "API key" in str(exc))
+
+# Without full API access only the 1280px copy is downloadable, so that — not
+# the original's dimensions — is what the size filter must judge.
+hit = {"imageWidth": 6000, "imageHeight": 4000,
+       "largeImageURL": "https://pixabay.com/x_1280.jpg"}
+url, w, h, full = rw._pixabay_download(hit)
+check("pixabay falls back to the 1280px copy", url.endswith("_1280.jpg") and not full)
+check("pixabay reports the size it can really download", (w, h) == (1280, 853))
+check("that size fails a 1920x1080 minimum",
+      not rw._fits(dict(rw.DEFAULTS, minimum="1920x1080"), w, h))
+full_hit = dict(hit, imageURL="https://pixabay.com/orig.jpg")
+url, w, h, full = rw._pixabay_download(full_hit)
+check("full API access uses the original", full and (w, h) == (6000, 4000))
 
 try:
     rw.pick_wallhaven(dict(rw.DEFAULTS, wallhaven_general=False,
@@ -94,9 +121,32 @@ try:
 except rw.FetchError:
     check("all categories off raises", True)
 
+# ── API answers are cached for a day: Pixabay's terms require it ────────────
+import time as _time
+
+feed = "https://konachan.net/post.json?tags=rating%3Asafe&limit=1&page=1"
+first = rw._get_json(feed)
+check("a live answer came back", isinstance(first, list))
+slot = next(rw.API_CACHE_DIR.glob("*.json"))
+check("API answer cached on disk", slot.is_file())
+slot.write_text(json.dumps({"marker": "from-cache"}))
+check("a cached answer is served without a request",
+      rw._get_json(feed) == {"marker": "from-cache"})
+check("an expired entry is refetched",
+      rw._get_json(feed, ttl=0) != {"marker": "from-cache"})
+_time.sleep(0)
+os.utime(slot, (0, 0))
+rw.prune_cache()
+check("prune drops expired API answers", not slot.exists())
+check("the URL is never written to disk — it carries the key",
+      all("key=" not in p.read_text() for p in rw.API_CACHE_DIR.glob("*.json")))
+
 # ── a real download per source, then the save path ──────────────────────────
 saved = []
 for label, key, _ in rw.SOURCES:
+    if key == "pixabay" and not rw.pixabay_key(rw.DEFAULTS):
+        print(f"SKIP  {label}: no API key in config or PIXABAY_API_KEY")
+        continue
     frame = rw.download(dict(rw.DEFAULTS, source=key))
     cached = frame["path"]
     check(f"{label}: download landed in cache",
@@ -113,20 +163,9 @@ for label, key, _ in rw.SOURCES:
 
 check("SAVE_DIR created on demand", rw.SAVE_DIR.is_dir())
 
-# ── konachan above Safe: konachan.com, which some routes redirect away ──────
-# Either outcome is correct; what must not happen is a silent empty result.
-for rating in ("sketchy", "nsfw"):
-    try:
-        meta = rw.pick_konachan(dict(rw.DEFAULTS, rating=rating, minimum=""))
-        check(f"konachan {rating} returned a post", meta["url"].startswith("http"))
-    except rw.FetchError as exc:
-        check(f"konachan {rating} explains the empty result",
-              "Wallhaven" in str(exc) or "page" in str(exc))
-
-# wallhaven sketchy needs no key; 18+ does, and the API silently drops nsfw
-# results without one rather than erroring — hence the explicit gate above.
-sketchy = rw.pick_wallhaven(dict(rw.DEFAULTS, source="wallhaven", rating="sketchy"))
-check("wallhaven sketchy works without a key", sketchy["url"].startswith("http"))
+# ── wallhaven works without a key; the key only lifts the rate limit ────────
+anon = rw.pick_wallhaven(dict(rw.DEFAULTS, source="wallhaven", wallhaven_apikey=""))
+check("wallhaven works without a key", anon["url"].startswith("http"))
 
 # ── collision branch: the whole point ───────────────────────────────────────
 precious = rw.SAVE_DIR / "konachan-1.jpg"

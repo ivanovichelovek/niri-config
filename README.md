@@ -227,16 +227,19 @@ Restore never overwrites: existing state is moved to `.bak.<timestamp>` first.
 
 `bin/random-wallpaper` — `Ctrl+Alt+W`, or "Random Wallpaper" in the launcher.
 A reel of random images: each frame is shown full-size, you keep it or drop it,
-and the window **stays open and advances to the next one**. Nine frames are
-downloaded ahead of the current one — ten in the reel counting the current —
-so the next is already there. `REEL_AHEAD` at the top of the script sets it.
+and the window **stays open and advances to the next one**. Six frames are
+downloaded ahead of the current one — seven in the reel counting the current —
+so the next is already there. Pixabay is the exception and fetches one frame at
+a time: its terms want a request to answer a person about to look at a picture,
+not a queue filling itself. `REEL_AHEAD` and `REEL_AHEAD_BY_SOURCE` at the top
+of the script set both depths.
 
 | key | button | effect |
 |---|---|---|
 | `S` / `Return` | Save | keep it, advance |
 | `D` / `Backspace` | Delete | unlink the download, advance |
 | `→` `←` | `›` `‹` | walk the reel without deciding |
-| `,` / `F2` | Filters | source, orientation, size, rating |
+| `,` / `F2` | Filters | source, orientation, size, per-source options |
 | `Q` / `Esc` | — | close; everything still undecided is discarded |
 
 The strip along the bottom is the reel itself — click any frame to jump to it.
@@ -247,27 +250,55 @@ it can hold an API key):
 
 | filter | values |
 |---|---|
-| Source | Konachan, Wallhaven |
+| Source | Konachan, Wallhaven, Pixabay |
 | Orientation | Any, Landscape, Portrait |
 | Minimum size | Any, 1920×1080, 2560×1440, 3840×2160 |
-| Rating | Safe, Sketchy, 18+ |
 | Wallhaven categories | General, Anime, People |
 
-Konachan has no server-side size filter, so it fetches 40 candidates from a
-random page and picks one that fits locally. Wallhaven filters server-side via
-`ratios` and `atleast`.
+Everything above Safe is deliberately not wired up: Konachan is pinned to
+`konachan.net`, Wallhaven to `purity=100`. There is no rating control, and a
+`rating` left in an older config file is dropped on load.
 
-Above Safe, Konachan uses `konachan.com`. What that host serves depends on the
-route: from some networks it answers `302` with
-`location: https://konachan.net/`, and `.net` indexes safe posts only, so the
-search comes back empty — a VPN changes the outcome. The request is made either
-way, and the empty case says which of the two happened rather than failing
-blankly.
+Orientation and minimum size apply to every source. Source-specific controls
+appear only while that source is selected — the Wallhaven categories and the
+Pixabay key are hidden otherwise, and the line under the dropdowns describes
+whichever source is current.
 
-Wallhaven serves Sketchy without an account. For 18+ it needs an API key —
-put it in Filters or set `WALLHAVEN_API_KEY` (fish's gitignored `secrets.fish`
-is the place). Without one the API silently drops nsfw results rather than
-erroring, so the app checks for the key up front and tells you.
+| source | what it serves | how it is filtered |
+|---|---|---|
+| Konachan | anime art, safe posts | 40 candidates from a random page, filtered locally |
+| Wallhaven | mixed; untick Anime for photographs | server-side, via `ratios` and `atleast` |
+| Pixabay | photography, no anime | server-side via `min_width`/`min_height`, then locally against the size actually downloadable |
+
+Wallhaven needs no account: its API key is not needed for anything the app now
+asks for, and the field stays only because a key already in the config would
+otherwise be thrown away silently. Pixabay **requires** a free API
+key (`pixabay.com/api/docs`): put it in Filters or set `PIXABAY_API_KEY` (fish's
+gitignored `secrets.fish` is the place).
+
+Pixabay serves the original file (`imageURL`/`fullHDURL`) only to accounts
+approved for full API access; everyone else gets `largeImageURL`, the image
+scaled to 1280 px on its long edge — while `imageWidth`/`imageHeight` keep
+describing an original that key cannot fetch. So the size filter judges the
+copy that will really be downloaded, and when nothing survives it, the error
+says the cap is the reason rather than blaming the filter.
+
+**A plain key therefore returns nothing at all above "Any size"**: 1280 px
+cannot clear a 1920×1080 minimum, so every candidate is rejected by
+construction. The hint under the dropdowns says so while Pixabay is selected
+and the minimum is set that high. Either lower it, or ask Pixabay for full API
+access from the link on `pixabay.com/api/docs`.
+
+Pixabay's full-access terms also require that identical requests not be
+repeated within 24 hours, so every API answer — not just Pixabay's — is cached
+under `~/.cache/random-wallpaper/api` for a day and pruned on the next start.
+Only the parsed answer is stored, never the request URL, which carries the key.
+Image downloads are not cached: they go to `~/.cache/random-wallpaper` and live
+or die with your decision.
+
+Unsplash and Pexels are deliberately absent: both forbid wallpaper applications
+in their API guidelines, Pexels naming "wallpaper and image gallery apps" as a
+replication of the service even for personal use.
 
 `~/random_wallpaper` is hardcoded and created on first save. **Saving cannot
 destroy an earlier wallpaper**: downloads live in `~/.cache/random-wallpaper`

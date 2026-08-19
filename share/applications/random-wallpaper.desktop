@@ -7,8 +7,8 @@ Icon=dev.ivanc.RandomWallpaper
 Terminal=false
 Categories=Graphics;Utility;
 StartupWMClass=dev.ivanc.RandomWallpaper
-Keywords=wallpaper;background;random;konachan;wallhaven;
-Actions=Konachan;Wallhaven;
+Keywords=wallpaper;background;random;konachan;wallhaven;pixabay;
+Actions=Konachan;Wallhaven;Pixabay;
 
 [Desktop Action Konachan]
 Name=From Konachan
@@ -17,3 +17,7 @@ Exec=/usr/bin/random-wallpaper --source konachan
 [Desktop Action Wallhaven]
 Name=From Wallhaven
 Exec=/usr/bin/random-wallpaper --source wallhaven
+
+[Desktop Action Pixabay]
+Name=From Pixabay
+Exec=/usr/bin/random-wallpaper --source pixabay
