@@ -966,11 +966,13 @@ The built-in calculator is kept out of the global search (`global = false`) to
 avoid two rows with two different answers; it is still there as `/calc`.
 
 Plugins are listed in the seeded `dots/noctalia/settings.toml`, which also
-registers this repo as a plugin source of kind `path`. After editing a local
-plugin, re-copy it into noctalia's materialized set:
+registers this repo as a plugin source of kind `path`. Such a source is read in
+place, not copied, and the entry file is watched — saving an edit reloads the
+provider. Errors land in `~/.cache/noctalia/noctalia.log`:
 
 ```fish
-noctalia msg plugins enable ivanovichelovek/equals-calc
+noctalia plugins lint dots/noctalia/plugins      # manifest vs. getConfig calls
+tail -f ~/.cache/noctalia/noctalia.log           # Luau errors at runtime
 ```
 
 ## Dropped — no Noctalia equivalent

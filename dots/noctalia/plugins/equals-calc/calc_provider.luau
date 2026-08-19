@@ -116,6 +116,8 @@ end
 -- take a beat (it loads its exchange rates), so the gap is real, if small.
 function onActivate(id)
 	if id == "copy" and lastAnswer ~= nil then
-		noctalia.copyToClipboard(lastAnswer)
+		-- The mime type is not optional: one argument fails the call outright
+		-- ("missing argument #2 to 'copyToClipboard'").
+		noctalia.copyToClipboard(lastAnswer, "text/plain")
 	end
 end
