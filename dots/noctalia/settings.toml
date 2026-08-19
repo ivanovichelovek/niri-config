@@ -42,6 +42,33 @@ widget_order = [ "lockscreen-login-box@eDP-1" ]
         show_session_buttons = true
         show_weather = true
 
+[plugins]
+# The launcher providers that make Mod+Space behave like iNiR's search: a
+# "Run: <what you typed>" row from the community shell-command plugin, and the
+# arithmetic row from dots/noctalia/plugins/equals-calc. What each one shows in
+# the *unprefixed* search is set in dots/noctalia/launcher.toml, which is
+# symlinked into ~/.config/noctalia — this list only says they exist and are on.
+#
+# Sources are where noctalia fetches plugins from. "official" and "community"
+# are its own two git repos; the path source is this repo, and bootstrap rewrites
+# it if the clone does not live at ~/niri-config.
+enabled = [ "weinguyen/shell-command", "ivanovichelovek/equals-calc" ]
+
+    [[plugins.source]]
+    kind = "git"
+    location = "https://github.com/noctalia-dev/official-plugins"
+    name = "official"
+
+    [[plugins.source]]
+    kind = "git"
+    location = "https://github.com/noctalia-dev/community-plugins"
+    name = "community"
+
+    [[plugins.source]]
+    kind = "path"
+    location = "~/niri-config/dots/noctalia/plugins"
+    name = "niri-config"
+
 [shell]
 telemetry_enabled = true
 

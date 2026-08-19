@@ -1,0 +1,28 @@
+# A launcher provider that answers arithmetic the way iNiR's search does: type
+# "=2+2" and the answer is the first row. Noctalia's own calculator can do the
+# sums, but its trigger is always the common prefix plus a name ("/calc"), and
+# an unprefixed "=2+2" reaches libqalculate verbatim — which reads the leading
+# "=" as an equality test and answers "0". This provider sits in the global
+# (unprefixed) search, so it sees the "=" and strips it before qalc does.
+id           = "ivanovichelovek/equals-calc"
+name         = "Equals Calculator"
+version      = "1.0.0"
+# 3 is the oldest supported manifest level and covers everything used here:
+# [[launcher_provider]], runAsync, copyToClipboard.
+plugin_api   = 3
+author       = "ivanovichelovek"
+license      = "MIT"
+icon         = "calculator"
+description  = "Arithmetic in the launcher: type = followed by an expression, or start with a number."
+tags         = ["launcher", "utility"]
+dependencies = ["qalc"]
+
+[[launcher_provider]]
+id                       = "provider"
+entry                    = "calc_provider.luau"
+prefix                   = "eq"
+glyph                    = "calculator"
+# The whole point: the row has to show up while you are just typing, with no
+# prefix in front of it.
+include_in_global_search = true
+debounce_ms              = 120

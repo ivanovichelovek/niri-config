@@ -51,6 +51,12 @@ cp    ~/GitHub/niri-config/dots/kitty/theme.conf ~/.config/kitty/themes/noctalia
 mkdir -p ~/.config/noctalia
 ln -s ~/GitHub/niri-config/dots/telegram ~/.config/noctalia/telegram
 
+# launcher: the command and calculator rows (see "Launcher")
+ln -s ~/GitHub/niri-config/dots/noctalia/launcher.toml ~/.config/noctalia/launcher.toml
+noctalia msg plugins source add niri-config path ~/GitHub/niri-config/dots/noctalia/plugins
+noctalia msg plugins enable weinguyen/shell-command
+noctalia msg plugins enable ivanovichelovek/equals-calc
+
 niri validate            # should print "config is valid"
 ```
 
@@ -899,7 +905,7 @@ owns every shortcut and forwards it over IPC. Bind keys here; run
 
 | key | action |
 |---|---|
-| `Mod+Space` | app launcher |
+| `Mod+Space` | app launcher — plus a command and a calculator row, see [Launcher](#launcher) |
 | `Mod+V` | clipboard panel |
 | `Mod+Shift+C` | control center *(new)* |
 | `Mod+Comma` | shell settings |
@@ -926,6 +932,46 @@ keyboard itself — and niri **collapses rows that share a title**, so the
 duplicate media binds (`Mod+Shift+P`/`N`/`B`, same actions as `Ctrl+Mod+Space`
 and `Mod+Alt+N`/`P`) are hidden explicitly rather than silently swallowing the
 rows above them.
+
+## Launcher
+
+`Mod+Space` opens noctalia's launcher, and two rows in it come from this repo
+rather than from noctalia — the two things iNiR's search did without a prefix:
+
+| you type | the row you get |
+|---|---|
+| `=2+2*sqrt(9)` | `= 8` — Enter copies the answer |
+| `2+2`, `10 km to m`, `100 usd to eur` | the same, no `=` needed |
+| anything at all | `Run: <what you typed>` — Enter opens it in kitty |
+
+noctalia can do both on its own, but only behind a prefix: every provider is
+reached as the common prefix plus a name (`/calc 2+2`, `/sh htop`), and typing a
+bare `=2+2` reaches libqalculate verbatim — which reads the leading `=` as an
+equality test and answers `0`.
+
+So two providers are added to the *unprefixed* search in
+`dots/noctalia/launcher.toml` (symlinked to `~/.config/noctalia/launcher.toml`,
+the override directory noctalia does not rewrite):
+
+- **`weinguyen/shell-command`** — a community plugin, and the "Run:" row. It
+  ships with global search off; the override turns it on. Behind `/sh` it also
+  does completions, history and `cd` navigation.
+- **`dots/noctalia/plugins/equals-calc`** — written here, twenty lines of Luau
+  around `qalc`. It strips the `=` before qalc sees it, and scores its row above
+  the "Run:" one so Enter copies the answer instead of throwing the sum at a
+  terminal. Without `=`, it answers when the query starts with a number *and*
+  carries an operator — so `1password` still just finds the app.
+
+The built-in calculator is kept out of the global search (`global = false`) to
+avoid two rows with two different answers; it is still there as `/calc`.
+
+Plugins are listed in the seeded `dots/noctalia/settings.toml`, which also
+registers this repo as a plugin source of kind `path`. After editing a local
+plugin, re-copy it into noctalia's materialized set:
+
+```fish
+noctalia msg plugins enable ivanovichelovek/equals-calc
+```
 
 ## Dropped — no Noctalia equivalent
 

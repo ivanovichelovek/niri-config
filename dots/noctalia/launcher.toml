@@ -1,0 +1,23 @@
+# Launcher providers. Both entries make something show up in the *unprefixed*
+# search, the way iNiR's launcher does — noctalia's own triggers are always the
+# common prefix plus a name ("/sh", "/calc"), which is a keystroke and a habit
+# too many when you just want to type a command or a sum.
+#
+# Overrides live here rather than in ~/.local/state/noctalia/settings.toml
+# because noctalia rewrites that file itself; ~/.config/noctalia/*.toml is the
+# user-override directory, and this file is symlinked into it.
+
+# Run what you typed in a terminal ("Run: <command>" row). The provider is the
+# community plugin weinguyen/shell-command, which ships
+# include_in_global_search = false — turned on here instead of forking it.
+[shell.launcher.providers."weinguyen/shell-command:provider"]
+global = true
+
+# Arithmetic, from dots/noctalia/plugins/equals-calc. It handles both "=2+2" and
+# a bare "2+2", so the built-in calculator is kept out of the global search to
+# avoid two rows with two different answers — it stays reachable as "/calc".
+[shell.launcher.providers."ivanovichelovek/equals-calc:provider"]
+global = true
+
+[shell.launcher.providers.calculator]
+global = false

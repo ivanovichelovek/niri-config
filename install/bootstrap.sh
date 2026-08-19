@@ -1162,6 +1162,33 @@ EOF
             fi
         fi
 
+        # The launcher overrides (a "Run: …" row and an arithmetic row in the
+        # unprefixed search) are a symlink, not a copy: noctalia rewrites
+        # ~/.local/state/noctalia/settings.toml itself, but ~/.config/noctalia
+        # is the user-override directory and it leaves those files alone.
+        # mkdir because the only other step that creates this directory is the
+        # telegram one, and that is its own question the user can decline.
+        as_user mkdir -p "$USER_HOME/.config/noctalia"
+        as_user ln -sfn "$REPO_ROOT/dots/noctalia/launcher.toml" \
+                        "$USER_HOME/.config/noctalia/launcher.toml"
+        info "$USER_HOME/.config/noctalia/launcher.toml -> $REPO_ROOT/dots/noctalia/launcher.toml"
+
+        # The providers behind those rows are plugins, and the plugin list lives
+        # in the settings file seeded above — so it is there only on a fresh
+        # seed, and only correct when the clone sits at the path the seed names.
+        PLUGIN_SRC="$REPO_ROOT/dots/noctalia/plugins"
+        SEEDED_SRC="$USER_HOME/niri-config/dots/noctalia/plugins"
+        if grep -q 'name = "niri-config"' "$NOCTALIA_SETTINGS" 2>/dev/null; then
+            if [[ $PLUGIN_SRC != "$SEEDED_SRC" ]]; then
+                as_user sed -i "s|~/niri-config/dots/noctalia/plugins|$PLUGIN_SRC|" "$NOCTALIA_SETTINGS"
+                info "plugin source points at $PLUGIN_SRC"
+            fi
+        else
+            # Settings were already there and left alone: noctalia has to be told
+            # about the plugins over IPC, which needs it running.
+            TODO+=("register the launcher plugins: noctalia msg plugins source add niri-config path $PLUGIN_SRC, then noctalia msg plugins enable weinguyen/shell-command and noctalia msg plugins enable ivanovichelovek/equals-calc")
+        fi
+
         # Happ: the sing-box config and the routing rules only. subs.db holds the
         # server subscriptions — credentials — and is gitignored, so it has to be
         # re-added by hand from the app.

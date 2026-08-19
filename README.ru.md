@@ -52,6 +52,12 @@ cp    ~/GitHub/niri-config/dots/kitty/theme.conf ~/.config/kitty/themes/noctalia
 mkdir -p ~/.config/noctalia
 ln -s ~/GitHub/niri-config/dots/telegram ~/.config/noctalia/telegram
 
+# лаунчер: строки команды и калькулятора (см. «Лаунчер»)
+ln -s ~/GitHub/niri-config/dots/noctalia/launcher.toml ~/.config/noctalia/launcher.toml
+noctalia msg plugins source add niri-config path ~/GitHub/niri-config/dots/noctalia/plugins
+noctalia msg plugins enable weinguyen/shell-command
+noctalia msg plugins enable ivanovichelovek/equals-calc
+
 niri validate            # должно напечатать "config is valid"
 ```
 
@@ -921,7 +927,7 @@ Noctalia не может перехватывать глобальные кла�
 
 | клавиша | действие |
 |---|---|
-| `Mod+Space` | лаунчер приложений |
+| `Mod+Space` | лаунчер приложений — плюс строка команды и калькулятора, см. [Лаунчер](#лаунчер) |
 | `Mod+V` | панель буфера обмена |
 | `Mod+Shift+C` | центр управления *(новое)* |
 | `Mod+Comma` | настройки оболочки |
@@ -949,6 +955,46 @@ Noctalia не может перехватывать глобальные кла�
 дублирующие медиа-бинды (`Mod+Shift+P`/`N`/`B`, те же действия, что у
 `Ctrl+Mod+Space` и `Mod+Alt+N`/`P`) скрыты явно, вместо того чтобы молча съесть
 строки выше.
+
+## Лаунчер
+
+`Mod+Space` открывает лаунчер noctalia, и две строки в нём — из этого репозитория,
+а не из самой noctalia: ровно то, что поиск iNiR делал без префикса.
+
+| что набрано | какая строка появляется |
+|---|---|
+| `=2+2*sqrt(9)` | `= 8` — Enter копирует ответ |
+| `2+2`, `10 km to m`, `100 usd to eur` | то же самое, `=` не нужен |
+| что угодно | `Run: <набранное>` — Enter открывает это в kitty |
+
+Обе вещи noctalia умеет и сама, но только за префиксом: любой провайдер
+вызывается как общий префикс плюс имя (`/calc 2+2`, `/sh htop`), а голый `=2+2`
+уходит в libqalculate как есть — та читает ведущий `=` как проверку равенства и
+отвечает `0`.
+
+Поэтому два провайдера добавлены в *беспрефиксный* поиск в
+`dots/noctalia/launcher.toml` (симлинк на `~/.config/noctalia/launcher.toml` —
+каталог пользовательских переопределений, который noctalia не перезаписывает):
+
+- **`weinguyen/shell-command`** — плагин из community-репозитория, строка «Run:».
+  По умолчанию он в глобальный поиск не попадает; переопределение его включает.
+  За префиксом `/sh` у него ещё дополнение команд, история и переход по каталогам.
+- **`dots/noctalia/plugins/equals-calc`** — написан здесь, двадцать строк Luau
+  вокруг `qalc`. Он срезает `=` до того, как его увидит qalc, и ставит свою строку
+  выше «Run:», чтобы Enter копировал ответ, а не отправлял выражение в терминал.
+  Без `=` он отвечает, только если запрос начинается с числа *и* содержит знак
+  операции — так что `1password` по-прежнему просто ищет приложение.
+
+Встроенный калькулятор убран из глобального поиска (`global = false`), чтобы не
+было двух строк с разными ответами; по префиксу `/calc` он на месте.
+
+Плагины перечислены в засеваемом `dots/noctalia/settings.toml`, там же этот
+репозиторий зарегистрирован как источник плагинов вида `path`. После правки
+локального плагина его нужно перекопировать в набор noctalia:
+
+```fish
+noctalia msg plugins enable ivanovichelovek/equals-calc
+```
 
 ## Выброшено — нет аналога в Noctalia
 
