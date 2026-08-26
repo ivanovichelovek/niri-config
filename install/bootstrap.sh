@@ -1301,18 +1301,28 @@ EOF
             TODO+=("check that greetd created the 'greeter' user")
         fi
 
-        # Only point at a wallpaper that actually exists, otherwise regreet
-        # logs an error on every boot.
-        WALL=/usr/share/noctalia/assets/noctalia-wallpaper.png
+        # regreet points at a file it doesn't own but the desktop user does,
+        # so bin/sync-greeter-wallpaper (wired as a Noctalia wallpaper_changed
+        # hook) can keep it in sync with the desktop wallpaper without sudo.
+        GREETER_WALL=/etc/greetd/wallpaper
+        FALLBACK_WALL=/usr/share/noctalia/assets/noctalia-wallpaper.png
+        CURRENT_WALL="$(as_user noctalia msg wallpaper-get 2>/dev/null | tail -n1)"
+        SRC_WALL=$FALLBACK_WALL
+        [[ -n $CURRENT_WALL && -f $CURRENT_WALL ]] && SRC_WALL=$CURRENT_WALL
+
+        if [[ -f $SRC_WALL ]]; then
+            install -o "$USER_NAME" -g "$USER_NAME" -m 0644 "$SRC_WALL" "$GREETER_WALL"
+        fi
+
         {
-            if [[ -f $WALL ]]; then
-                printf '[background]\npath = "%s"\nfit = "Cover"\n\n' "$WALL"
+            if [[ -f $GREETER_WALL ]]; then
+                printf '[background]\npath = "%s"\nfit = "Cover"\n\n' "$GREETER_WALL"
             fi
             printf '[GTK]\napplication_prefer_dark_theme = true\ncursor_theme_name = "Adwaita"\n'
         } >/etc/greetd/regreet.toml
 
-        if [[ -f $WALL ]]; then
-            info "wallpaper: $WALL (change it in /etc/greetd/regreet.toml)"
+        if [[ -f $GREETER_WALL ]]; then
+            info "wallpaper: $GREETER_WALL, kept in sync with the desktop by bin/sync-greeter-wallpaper"
         else
             warn "no wallpaper set — noctalia assets not found (installed with --skip-aur?)"
             TODO+=("set [background] path in /etc/greetd/regreet.toml")

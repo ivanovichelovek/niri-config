@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Mirror the current desktop wallpaper onto the greeter (regreet) background.
+#
+# /etc/greetd/regreet.toml points at /etc/greetd/wallpaper. That file is
+# owned by the desktop user, not root (see install/bootstrap.sh), so this can
+# overwrite its contents on every wallpaper change without sudo.
+#
+# Wired into Noctalia as a `wallpaper_changed` hook (see
+# ~/.local/state/noctalia/settings.toml).
+set -euo pipefail
+
+target=/etc/greetd/wallpaper
+
+wallpaper="$(noctalia msg wallpaper-get 2>/dev/null | tail -n1)"
+[ -n "$wallpaper" ] && [ -f "$wallpaper" ] || exit 0
+
+cp -f "$wallpaper" "$target"
