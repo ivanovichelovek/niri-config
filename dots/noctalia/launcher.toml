@@ -7,10 +7,13 @@
 # because noctalia rewrites that file itself; ~/.config/noctalia/*.toml is the
 # user-override directory, and this file is symlinked into it.
 
-# Run what you typed in a terminal ("Run: <command>" row). The provider is the
-# community plugin weinguyen/shell-command, which ships
-# include_in_global_search = false — turned on here instead of forking it.
-[shell.launcher.providers."weinguyen/shell-command:provider"]
+# Run what you typed in a terminal ("Run: <command>" row). The provider is
+# dots/noctalia/plugins/run-command, a fork of the community
+# weinguyen/shell-command plugin: same behavior, plus a check so a command
+# whose first word doesn't exist is swallowed on Enter instead of flashing a
+# terminal open just to print "command not found". It ships
+# include_in_global_search = false like upstream — turned on here.
+[shell.launcher.providers."ivanovichelovek/run-command:provider"]
 global = true
 
 # Arithmetic, from dots/noctalia/plugins/equals-calc. It handles both "=2+2" and

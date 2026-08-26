@@ -25,4 +25,8 @@ glyph                    = "calculator"
 # The whole point: the row has to show up while you are just typing, with no
 # prefix in front of it.
 include_in_global_search = true
-debounce_ms              = 120
+# Trailing debounce (resets on every keystroke, fires only once typing pauses
+# — see run-command/plugin.toml for the source pointer): 120ms was longer than
+# a normal keystroke gap, so the "= …" row lagged behind fast typing instead
+# of tracking the expression as it grew.
+debounce_ms              = 20

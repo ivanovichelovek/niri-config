@@ -54,7 +54,7 @@ ln -s ~/GitHub/niri-config/dots/telegram ~/.config/noctalia/telegram
 # launcher: the command and calculator rows (see "Launcher")
 ln -s ~/GitHub/niri-config/dots/noctalia/launcher.toml ~/.config/noctalia/launcher.toml
 noctalia msg plugins source add niri-config path ~/GitHub/niri-config/dots/noctalia/plugins
-noctalia msg plugins enable weinguyen/shell-command
+noctalia msg plugins enable ivanovichelovek/run-command
 noctalia msg plugins enable ivanovichelovek/equals-calc
 
 niri validate            # should print "config is valid"
@@ -942,7 +942,8 @@ rather than from noctalia — the two things iNiR's search did without a prefix:
 |---|---|
 | `=2+2*sqrt(9)` | `= 8` — Enter copies the answer |
 | `2+2`, `10 km to m`, `100 usd to eur` | the same, no `=` needed |
-| anything at all | `Run: <what you typed>` — Enter opens it in kitty |
+| a real command, e.g. `htop` | `Run: <what you typed>` — Enter opens it in kitty |
+| garbage, e.g. `ajdfkl` | `Run: <what you typed>` shows, but Enter does nothing — no terminal for a typo |
 
 noctalia can do both on its own, but only behind a prefix: every provider is
 reached as the common prefix plus a name (`/calc 2+2`, `/sh htop`), and typing a
@@ -953,9 +954,12 @@ So two providers are added to the *unprefixed* search in
 `dots/noctalia/launcher.toml` (symlinked to `~/.config/noctalia/launcher.toml`,
 the override directory noctalia does not rewrite):
 
-- **`weinguyen/shell-command`** — a community plugin, and the "Run:" row. It
-  ships with global search off; the override turns it on. Behind `/sh` it also
-  does completions, history and `cd` navigation.
+- **`dots/noctalia/plugins/run-command`** — the "Run:" row, a fork of the
+  community `weinguyen/shell-command` plugin. It ships with global search off;
+  the override turns it on. Behind `/sh` it also does completions, history and
+  `cd` navigation. The fork's one change: Enter is a no-op when the first word
+  isn't a real command — upstream would open a terminal just to print "command
+  not found" and sit there.
 - **`dots/noctalia/plugins/equals-calc`** — written here, twenty lines of Luau
   around `qalc`. It strips the `=` before qalc sees it, and scores its row above
   the "Run:" one so Enter copies the answer instead of throwing the sum at a

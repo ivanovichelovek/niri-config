@@ -1,0 +1,45 @@
+# Fork of the community weinguyen/shell-command plugin (see its materialized
+# copy under ~/.local/state/noctalia/plugins/materialized/community/shell-command
+# for the unmodified original). The only behavioral change: "Run: <command>"
+# no longer opens a terminal for a command whose first word isn't a real
+# binary — it silently does nothing instead of flashing a terminal that just
+# prints "command not found" and sits there. See shell_provider.luau for the
+# check (onActivate, kind == "run").
+id           = "ivanovichelovek/run-command"
+name         = "Run Command"
+version      = "1.0.0"
+plugin_api   = 3
+author       = "ivanovichelovek"
+license      = "MIT"
+icon         = "terminal"
+description  = "Run a shell command from the launcher. Unlike upstream shell-command, a nonexistent command is swallowed instead of opening a terminal."
+tags         = ["launcher", "productivity", "development"]
+dependencies = ["bash", "fish", "ls", "sh"]
+
+[[setting]]
+key             = "default_workspace"
+type            = "folder"
+default         = ""
+label_key       = "settings.default_workspace.label"
+description_key = "settings.default_workspace.description"
+
+[[setting]]
+key             = "snippets"
+type            = "string_list"
+default         = []
+label_key       = "settings.snippets.label"
+description_key = "settings.snippets.description"
+
+[[launcher_provider]]
+id                       = "provider"
+entry                    = "shell_provider.luau"
+prefix                   = "sh"
+glyph                    = "terminal"
+include_in_global_search = false
+# Noctalia's debounce is trailing: it resets on every keystroke and only fires
+# once typing pauses (src/launcher/plugin_launcher_provider.cpp,
+# armQueryTimer). Upstream's 150ms is longer than a normal keystroke gap, so
+# typing "reboot" at speed left the row stuck on whatever "re" had produced —
+# Enter would fire on stale results. 20ms keeps up with typing while still
+# coalescing a paste or a very fast burst into one fish-completion spawn.
+debounce_ms              = 20

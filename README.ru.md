@@ -55,7 +55,7 @@ ln -s ~/GitHub/niri-config/dots/telegram ~/.config/noctalia/telegram
 # лаунчер: строки команды и калькулятора (см. «Лаунчер»)
 ln -s ~/GitHub/niri-config/dots/noctalia/launcher.toml ~/.config/noctalia/launcher.toml
 noctalia msg plugins source add niri-config path ~/GitHub/niri-config/dots/noctalia/plugins
-noctalia msg plugins enable weinguyen/shell-command
+noctalia msg plugins enable ivanovichelovek/run-command
 noctalia msg plugins enable ivanovichelovek/equals-calc
 
 niri validate            # должно напечатать "config is valid"
@@ -965,7 +965,8 @@ Noctalia не может перехватывать глобальные кла�
 |---|---|
 | `=2+2*sqrt(9)` | `= 8` — Enter копирует ответ |
 | `2+2`, `10 km to m`, `100 usd to eur` | то же самое, `=` не нужен |
-| что угодно | `Run: <набранное>` — Enter открывает это в kitty |
+| реальная команда, напр. `htop` | `Run: <набранное>` — Enter открывает это в kitty |
+| несуществующая, напр. `ajdfkl` | строка `Run:` показывается, но Enter ничего не делает — терминал под опечатку не открывается |
 
 Обе вещи noctalia умеет и сама, но только за префиксом: любой провайдер
 вызывается как общий префикс плюс имя (`/calc 2+2`, `/sh htop`), а голый `=2+2`
@@ -976,9 +977,13 @@ Noctalia не может перехватывать глобальные кла�
 `dots/noctalia/launcher.toml` (симлинк на `~/.config/noctalia/launcher.toml` —
 каталог пользовательских переопределений, который noctalia не перезаписывает):
 
-- **`weinguyen/shell-command`** — плагин из community-репозитория, строка «Run:».
-  По умолчанию он в глобальный поиск не попадает; переопределение его включает.
-  За префиксом `/sh` у него ещё дополнение команд, история и переход по каталогам.
+- **`dots/noctalia/plugins/run-command`** — строка «Run:», форк плагина
+  `weinguyen/shell-command` из community-репозитория. По умолчанию он в
+  глобальный поиск не попадает; переопределение его включает. За префиксом
+  `/sh` у него ещё дополнение команд, история и переход по каталогам.
+  Единственное изменение форка: Enter ничего не делает, если первое слово —
+  не существующая команда, вместо того чтобы открывать терминал ради
+  «command not found».
 - **`dots/noctalia/plugins/equals-calc`** — написан здесь, двадцать строк Luau
   вокруг `qalc`. Он срезает `=` до того, как его увидит qalc, и ставит свою строку
   выше «Run:», чтобы Enter копировал ответ, а не отправлял выражение в терминал.

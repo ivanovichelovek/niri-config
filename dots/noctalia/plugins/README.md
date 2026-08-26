@@ -14,3 +14,7 @@ before that.
 - `equals-calc` — arithmetic in the launcher input: `=2+2`, or a bare `2+2`.
   Fills the gap left by noctalia's own calculator, whose trigger is always
   `/calc` and which reads a leading `=` as an equality test.
+- `run-command` — fork of the community `weinguyen/shell-command` plugin.
+  Same "Run: <command>" row and `/sh` completions, but Enter on a command
+  whose first word isn't a real binary is swallowed instead of opening a
+  terminal that just prints "command not found".
