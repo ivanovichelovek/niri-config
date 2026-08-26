@@ -99,6 +99,11 @@ binds {
     Mod+Return hotkey-overlay-title="Open a Terminal: kitty" { spawn "kitty" "-1"; }
     Super+E hotkey-overlay-title="Open the File Manager: Dolphin" { spawn "dolphin"; }
     Super+W hotkey-overlay-title="Open the Browser: Zen" { spawn "zen-browser"; }
+    // X, as in M-x — Emacs itself has evil's whole vim layer bound the usual
+    // way, this is just the launcher key. GUI build, not a terminal spawn:
+    // pdf-tools needs a real frame to rasterise PDF pages into (see
+    // dots/emacs/lisp/init-pdf.el).
+    Super+X hotkey-overlay-title="Open Emacs" { spawn "emacs"; }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Window management

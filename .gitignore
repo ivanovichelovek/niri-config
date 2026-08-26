@@ -1,6 +1,13 @@
 *.bak
 *.bak2
 *.lock
+
+# Emacs droppings, on the off chance something writes next to source instead
+# of into ic-cache-dir (dots/emacs/init.el/early-init.el redirect
+# packages/grammars/caches there deliberately, verified empty otherwise).
+dots/emacs/**/*.elc
+dots/emacs/**/#*#
+dots/emacs/**/.#*
 dots/fish/conf.d/secrets.fish
 
 __pycache__/

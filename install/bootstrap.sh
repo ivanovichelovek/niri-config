@@ -187,10 +187,11 @@ step_ask() {
     esac
 }
 
-# Point ~/.config/<name> at dots/<name>. An existing real directory is moved
+# Point ~/.config/<name> (or DST, if given — emacs wants ~/.emacs.d, not
+# ~/.config/emacs) at dots/<name>. An existing real directory is moved
 # aside rather than deleted — this script must never lose someone's config.
 link_dot() {
-    local name=$1 dst="$USER_HOME/.config/$1"
+    local name=$1 dst="${2:-$USER_HOME/.config/$1}"
     if [[ -e $dst && ! -L $dst ]]; then
         local backup="$dst.bak.$(date +%Y%m%d%H%M%S)"
         warn "$dst exists — moving it to $backup"
@@ -553,6 +554,17 @@ PKGS=(
     xorg-xwayland xwayland-satellite xcb-util-cursor
     # shell + terminal + editor (starship and eza are used by dots/fish)
     fish kitty neovim micro starship eza
+    # emacs (dots/emacs — GUI build, pdf-tools renders real PDF pages in a
+    # buffer, so this is not iNiR's/scripted-terminal territory). poppler-glib
+    # is pdf-tools' epdfinfo build dependency (autoconf/automake/pkgconf/gcc
+    # themselves are assumed already present via base-devel, see the header
+    # comment). ripgrep backs consult-ripgrep (SPC /); clang provides clangd
+    # for C/C++ eglot. typst, tinymist, tectonic and pandoc-cli are the same
+    # build/preview pipeline dots/nvim's typst.lua, tectonic.lua and
+    # markdown-pdf.lua used, now driven from dots/emacs/lisp/init-preview.el
+    # instead — still needed even though zathura is no longer, pdf-tools
+    # replaced it as the viewer.
+    emacs poppler-glib ripgrep clang typst tinymist tectonic pandoc-cli
     # noctalia runtime deps that live in the official repos
     # (imagemagick also resizes the wallpaper in bin/noctalia-telegram-theme)
     imagemagick brightnessctl ffmpeg wlr-randr python libqalculate
@@ -1055,6 +1067,20 @@ EOF
     else
         warn "fish keeps its default config; the prompt and abbreviations are not installed"
         TODO+=("link the shell config: ln -s $REPO_ROOT/dots/fish ~/.config/fish")
+    fi
+
+    if step_ask "Emacs config"; then
+        # ~/.emacs.d, not ~/.config/emacs: Emacs only looks at the XDG path
+        # when ~/.emacs.d does not already exist at first launch, and on a
+        # from-scratch install neither exists yet — ~/.emacs.d is the one it
+        # actually falls back to (confirmed with `emacs --batch --eval
+        # '(message user-emacs-directory)'`).
+        link_dot emacs "$USER_HOME/.emacs.d"
+        info "$USER_HOME/.emacs.d -> $REPO_ROOT/dots/emacs"
+        TODO+=("first Emacs launch installs packages, builds pdf-tools' epdfinfo server and compiles treesitter grammars — takes a couple of minutes and needs network")
+    else
+        warn "Emacs keeps its default (blank) config"
+        TODO+=("link the config: ln -s $REPO_ROOT/dots/emacs ~/.emacs.d")
     fi
 
     if step_ask "kitty config"; then
