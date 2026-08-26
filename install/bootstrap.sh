@@ -22,7 +22,7 @@ SKIP_GREETER=0
 SKIP_LINK=0
 SKIP_WALLPAPERS=0
 ASSUME_YES=0        # 1: never ask, do every step (set by --yes or "yes for all")
-GREETER="regreet"   # regreet | noctalia | tuigreet | none
+GREETER="noctalia"  # regreet | noctalia | tuigreet | none
 USER_NAME=""        # empty: ask, defaulting to $SUDO_USER
 # Drivers. Empty means detect from the hardware (see "hardware" below); the
 # flags exist to override a wrong guess — and to exercise the Intel and NVIDIA
@@ -50,7 +50,7 @@ Options:
   --skip-greeter     don't install or enable a display manager
   --skip-link        install packages only, don't touch ~/.config
   --skip-wallpapers  don't fetch the wallpaper set
-  --greeter <name>   regreet (default) | noctalia | tuigreet | none
+  --greeter <name>   noctalia (default) | regreet | tuigreet | none
   --user <name>      install for this user (default: ask, offering $SUDO_USER)
   --cpu <vendor>     microcode: amd | intel | none (default: detect)
   --gpu <vendors>    GPU userspace: amd | intel | nvidia | none, comma-separated
@@ -1359,9 +1359,14 @@ EOF
 vt = 1
 
 [default_session]
-command = "noctalia-greeter"
+command = "/usr/bin/noctalia-greeter-session"
 user = "greeter"
 EOF
+        # noctalia-greeter itself needs WAYLAND_DISPLAY already set and exits
+        # immediately without it ("run via noctalia-greeter-session") — leaving
+        # greetd holding a bare VT with no session, which reads as a gray
+        # screen you can type into but that does nothing. -session is the
+        # wrapper that starts the bundled wlroots compositor first.
         info "noctalia-greeter bundles its own wlroots compositor — no cage needed"
         ;;
     *)
