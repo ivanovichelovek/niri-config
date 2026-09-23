@@ -60,6 +60,15 @@ window-rule {
     default-floating-position x=10 y=10 relative-to="bottom-right"
 }
 
+// Steam's dropdown/popup menus (account switcher, context menus) are CEF
+// popups that can render slightly outside the parent window's geometry.
+// The global clip-to-geometry rule above cuts them off, making them appear
+// invisible/unopenable. Exempt Steam from clipping.
+window-rule {
+    match app-id="steam"
+    clip-to-geometry false
+}
+
 // ── Privacy: block password managers from screen capture ────────────────────
 // Uncomment the block below to hide these apps during screencasts.
 // /-window-rule {
