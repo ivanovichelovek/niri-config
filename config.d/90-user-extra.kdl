@@ -99,7 +99,27 @@ binds {
     // Download a random wallpaper and preview it before keeping it.
     // Saves to ~/random_wallpaper only when you press Save; Delete throws the
     // download away. Also in the launcher as "Random Wallpaper".
+    //
+    // Three tabs: the reel, everything you have kept, and the settings.
+    // `1`/`2`/`3` switch between them. The settings hold the switch for the
+    // rotation that follows the calendar on its own — see 50-startup.kdl
+    // for the tick that drives it.
     Ctrl+Alt+W repeat=false hotkey-overlay-title="Random wallpaper" { spawn "/usr/bin/random-wallpaper"; }
+
+    // The same reel, opened on whatever season or holiday today falls in.
+    Ctrl+Alt+Shift+W repeat=false hotkey-overlay-title="Wallpaper for the season" { spawn "/usr/bin/random-wallpaper" "--theme" "now"; }
+
+    // The switch for the calendar rotation, and the whole of its story:
+    //
+    //   off -> on   turns it back on AND puts this period's wallpaper up at
+    //               once, so the key visibly does something;
+    //   on  -> off  stops it dead. Nothing changes the wallpaper again until
+    //               you press this.
+    //
+    // You rarely need the "off" half by hand: setting any wallpaper yourself
+    // — here, in Noctalia's picker, anywhere — already switches it off on its
+    // own. This is how you say "go back to following the calendar".
+    Ctrl+Alt+A repeat=false hotkey-overlay-title="Wallpaper: follow the calendar" { spawn "/usr/bin/random-wallpaper" "--auto-toggle"; }
 
     // The reading desk: what Claude has recommended, with your own marks.
     // Ctrl+Alt+Shift+B opens it straight on the picker instead of the shelf.

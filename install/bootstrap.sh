@@ -34,6 +34,9 @@ AUDIO_PATH=""       # empty: detect. sof | hda | none
 # fetches every branch, so images on a branch next to the config would have
 # ridden along with every clone anyway.
 WALLPAPER_REPO="https://github.com/ivanovichelovek/niri-wallpapers.git"
+# random-wallpaper used to live in bin/; it is a standalone app now, installed
+# from here by the config step.
+RANDOM_WALLPAPER_REPO="https://github.com/ivanovichelovek/RandomWallpaper.git"
 
 usage() {
     sed -n '2,16p' "$0" | sed 's/^# \?//'
@@ -568,11 +571,14 @@ PKGS=(
     # noctalia runtime deps that live in the official repos
     # (imagemagick also resizes the wallpaper in bin/noctalia-telegram-theme)
     imagemagick brightnessctl ffmpeg wlr-randr python libqalculate
-    # bin/random-wallpaper and bin/bookshelf are GTK4 apps (no libadwaita —
-    # they ship their own theme); both talk to their APIs with stdlib urllib.
-    # bookshelf additionally shells out to the `claude` CLI, which bootstrap
-    # does not install: it wants a logged-in subscription, not a package.
+    # bin/bookshelf is a GTK4 app (no libadwaita — it ships its own theme)
+    # that talks to its API with stdlib urllib, and shells out to the `claude`
+    # CLI, which bootstrap does not install: it wants a logged-in
+    # subscription, not a package.
     python-gobject gtk4 librsvg
+    # random-wallpaper is installed with `uv tool install` in the config step;
+    # uv brings its Qt (PySide6) and, if need be, its Python along.
+    uv
     # apps. Dolphin is the file manager (Super+E in 70-binds.kdl); ark, okular
     # and imv are what it hands archives, documents and images to. The
     # associations are in share/mimeapps.list, copied into place further down.
@@ -810,8 +816,8 @@ fi
 # ─── wallpapers ─────────────────────────────────────────────────────────────
 # A step of its own, and deliberately not tied to anything else: the image set
 # is ~83 MB and lives in a separate repository, so a clone of the config does
-# not pay for it. bin/random-wallpaper is installed with the other helper
-# scripts and is independent of this step — it downloads its own images.
+# not pay for it. random-wallpaper is installed by the config step and is
+# independent of this one — it downloads its own images.
 #
 # Runs before the config block because the noctalia settings seeded there name a
 # wallpaper by absolute path and fall back to noctalia's own if the file is
@@ -881,20 +887,39 @@ else
         done
         info "helper scripts linked into ~/.local/bin"
 
-        # random-wallpaper and bookshelf go system-wide instead. They are the
-        # helpers with a .desktop entry, and a desktop entry is launched by
-        # whatever PATH the launcher happens to have — which is not the shell's.
-        # /usr/bin is on every PATH there is, so the entry can name an absolute
-        # path that does not depend on $HOME either.
+        # bookshelf goes system-wide instead. It is the helper with a .desktop
+        # entry, and a desktop entry is launched by whatever PATH the launcher
+        # happens to have — which is not the shell's. /usr/bin is on every PATH
+        # there is, so the entry can name an absolute path that does not depend
+        # on $HOME either.
         #
         # A symlink rather than a copy, to match the rest of bin/: edits to the
         # repo are live, with no reinstall step. It does mean /usr/bin holds a
         # root-owned link into $USER_HOME, so it dangles if the repo moves —
         # rerunning this step fixes that.
-        for app in random-wallpaper bookshelf; do
-            ln -sfn "$REPO_ROOT/bin/$app" "/usr/bin/$app"
-            info "/usr/bin/$app -> $REPO_ROOT/bin/$app"
-        done
+        ln -sfn "$REPO_ROOT/bin/bookshelf" /usr/bin/bookshelf
+        info "/usr/bin/bookshelf -> $REPO_ROOT/bin/bookshelf"
+
+        # random-wallpaper, from its own repository. Not asked about: the
+        # binds, the login tick and the launcher entry all call it. `uv tool
+        # install` gives it an isolated environment with its entry points in
+        # ~/.local/bin; --force --reinstall-package so a rerun picks up new
+        # commits instead of stopping at "already installed". /usr/bin then
+        # links to that, for the same reason as bookshelf above — the config
+        # names /usr/bin/random-wallpaper, never a path under $HOME.
+        #
+        # An `if`, so a failed clone (no network) is a TODO, not the end of
+        # the script under `set -e`, and never leaves a dangling link.
+        if as_user uv tool install --quiet --force --reinstall-package randomwallpaper \
+                "git+$RANDOM_WALLPAPER_REPO"; then
+            ln -sfn "$USER_HOME/.local/bin/random-wallpaper" /usr/bin/random-wallpaper
+            info "random-wallpaper installed, /usr/bin/random-wallpaper -> ~/.local/bin"
+            HAVE_RANDOM_WALLPAPER=1
+        else
+            warn "could not install random-wallpaper from $RANDOM_WALLPAPER_REPO"
+            TODO+=("uv tool install git+$RANDOM_WALLPAPER_REPO && sudo ln -sfn ~/.local/bin/random-wallpaper /usr/bin/random-wallpaper && random-wallpaper --install-timer")
+            HAVE_RANDOM_WALLPAPER=0
+        fi
 
         # Dolphin right-click actions. These are what unar-here and
         # fix-legacy-names are reached through, so they follow the scripts.
@@ -946,6 +971,33 @@ else
         done
         as_user update-desktop-database "$USER_HOME/.local/share/applications" 2>/dev/null || true
         info "desktop entries linked into ~/.local/share/applications"
+
+        # random-wallpaper's calendar rotation. The timer is what keeps the
+        # season honest while the session is up; 50-startup.kdl spawns the same
+        # --auto tick at login for the gap before its first run. Both are safe
+        # together — a tick acts only when today's period differs from the one
+        # already applied.
+        #
+        # The units are the app's own: --install-timer writes them. An older
+        # run of this script linked this repo's copies in under the same names,
+        # and the app writes through a symlink — so those links go first, or
+        # the write would land back in the repo.
+        #
+        # The app enables the timer itself but ignores failure, and from a TTY
+        # or under sudo there is no user bus to enable it on — hence the
+        # explicit enable afterwards. Enabled, not started: the service wants
+        # graphical-session.target.
+        if [[ $HAVE_RANDOM_WALLPAPER == 1 ]]; then
+            for u in random-wallpaper-auto.service random-wallpaper-auto.timer; do
+                if [[ -L $USER_HOME/.config/systemd/user/$u ]]; then
+                    rm -f "$USER_HOME/.config/systemd/user/$u"
+                fi
+            done
+            as_user /usr/bin/random-wallpaper --install-timer >/dev/null 2>&1 || true
+            as_user systemctl --user enable random-wallpaper-auto.timer 2>/dev/null \
+                || TODO+=("random-wallpaper --install-timer (the timer is not enabled yet)")
+            info "seasonal wallpaper timer installed into ~/.config/systemd/user"
+        fi
 
         ICON_DIR="$USER_HOME/.local/share/icons/hicolor/scalable/apps"
         as_user mkdir -p "$ICON_DIR"

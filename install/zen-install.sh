@@ -163,7 +163,7 @@ info "$(sed -n 's/^Version=//p' "$DEST/application.ini" | head -1), owned by $US
 # ─── how the rest of the system reaches it ──────────────────────────────────
 # Both names: config.d/70-binds.kdl spawns "zen-browser" on Super+W, while
 # everything else calls it "zen". /usr/bin rather than /usr/local/bin for the
-# reason spelled out at the random-wallpaper symlink in bootstrap.sh — a desktop
+# reason spelled out at the bookshelf symlink in bootstrap.sh — a desktop
 # entry or a compositor bind runs with whatever PATH the launcher has, not the
 # shell's, and /usr/bin is on every PATH there is.
 step "Symlinks and desktop entry"

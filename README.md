@@ -70,9 +70,9 @@ Zen is the one that does not come from a package. See
 All helper scripts live in `bin/` and are symlinked into `~/.local/bin`:
 `lock-and-suspend`, `niri-pin-window`, `niri-toggle-gaps`,
 `noctalia-telegram-theme` and `wlsunset-restart` (called by
-`lock-and-suspend`). The two with a window and a launcher entry —
-`random-wallpaper` and `bookshelf` — go to `/usr/bin` instead, because a
-`.desktop` entry is launched with whatever PATH the launcher has. `claude-state` lives there too but is run by hand — see
+`lock-and-suspend`). The one with a window and a launcher entry, `bookshelf`,
+goes to `/usr/bin` instead, because a `.desktop` entry is launched with
+whatever PATH the launcher has. `claude-state` lives there too but is run by hand — see
 [Moving to a new machine](#moving-to-a-new-machine).
 
 `unar-here` and `fix-legacy-names` are reached from Dolphin's right-click menu
@@ -128,9 +128,9 @@ used as-is and nothing is cloned. Declining the step, `--skip-wallpapers`, or no
 network are handled the same way: noctalia's settings are pointed at the
 wallpaper it ships, so the shell still starts on something.
 
-`bin/random-wallpaper` is **independent of all this** — it is installed with the
-other helper scripts and downloads its own images. Skipping the wallpaper set
-costs you the seed collection, not the app.
+`random-wallpaper` is **independent of all this** — it is installed by the config
+step and downloads its own images. Skipping the wallpaper set costs you the seed
+collection, not the app.
 
 ## Local overrides
 
@@ -231,101 +231,23 @@ Restore never overwrites: existing state is moved to `.bak.<timestamp>` first.
 
 ## Random wallpaper
 
-`bin/random-wallpaper` — `Ctrl+Alt+W`, or "Random Wallpaper" in the launcher.
-A reel of random images: each frame is shown full-size, you keep it or drop it,
-and the window **stays open and advances to the next one**. Six frames are
-downloaded ahead of the current one — seven in the reel counting the current —
-so the next is already there. Pixabay is the exception and fetches one frame at
-a time: its terms want a request to answer a person about to look at a picture,
-not a queue filling itself. `REEL_AHEAD` and `REEL_AHEAD_BY_SOURCE` at the top
-of the script set both depths.
+A standalone app now: [RandomWallpaper](https://github.com/ivanovichelovek/RandomWallpaper),
+where its documentation lives. The config step of `install/bootstrap.sh` always
+installs it, without asking:
 
-| key | button | effect |
-|---|---|---|
-| `S` / `Return` | Save | keep it, advance |
-| `D` / `Backspace` | Delete | unlink the download, advance |
-| `→` `←` | `›` `‹` | walk the reel without deciding |
-| `,` / `F2` | Filters | source, orientation, size, per-source options |
-| `Q` / `Esc` | — | close; everything still undecided is discarded |
+- `uv tool install git+https://github.com/ivanovichelovek/RandomWallpaper.git`
+  (rerunning the step reinstalls it from the latest commit);
+- `/usr/bin/random-wallpaper` → `~/.local/bin/random-wallpaper`, because the
+  binds, the login tick in `config.d/50-startup.kdl` and
+  `share/applications/random-wallpaper.desktop` call it by that path;
+- `random-wallpaper --install-timer` for the calendar rotation's systemd timer.
+  The units are the app's own; this repo no longer ships copies.
 
-The strip along the bottom is the reel itself — click any frame to jump to it.
-The current one is ringed in the accent colour.
-
-**Filters** are saved to `~/.config/random-wallpaper/config.json` (mode 0600,
-it can hold an API key):
-
-| filter | values |
-|---|---|
-| Source | Konachan, Wallhaven, Pixabay |
-| Orientation | Any, Landscape, Portrait |
-| Minimum size | Any, 1920×1080, 2560×1440, 3840×2160 |
-| Wallhaven categories | General, Anime, People |
-
-Everything above Safe is deliberately not wired up: Konachan is pinned to
-`konachan.net`, Wallhaven to `purity=100`. There is no rating control, and a
-`rating` left in an older config file is dropped on load.
-
-Orientation and minimum size apply to every source. Source-specific controls
-appear only while that source is selected — the Wallhaven categories and the
-Pixabay key are hidden otherwise, and the line under the dropdowns describes
-whichever source is current.
-
-| source | what it serves | how it is filtered |
-|---|---|---|
-| Konachan | anime art, safe posts | 40 candidates from a random page, filtered locally |
-| Wallhaven | mixed; untick Anime for photographs | server-side, via `ratios` and `atleast` |
-| Pixabay | photography, no anime | server-side via `min_width`/`min_height`, then locally against the size actually downloadable |
-
-Wallhaven needs no account: its API key is not needed for anything the app now
-asks for, and the field stays only because a key already in the config would
-otherwise be thrown away silently. Pixabay **requires** a free API
-key (`pixabay.com/api/docs`): put it in Filters or set `PIXABAY_API_KEY` (fish's
-gitignored `secrets.fish` is the place).
-
-Pixabay serves the original file (`imageURL`/`fullHDURL`) only to accounts
-approved for full API access; everyone else gets `largeImageURL`, the image
-scaled to 1280 px on its long edge — while `imageWidth`/`imageHeight` keep
-describing an original that key cannot fetch. So the size filter judges the
-copy that will really be downloaded, and when nothing survives it, the error
-says the cap is the reason rather than blaming the filter.
-
-**A plain key therefore returns nothing at all above "Any size"**: 1280 px
-cannot clear a 1920×1080 minimum, so every candidate is rejected by
-construction. The hint under the dropdowns says so while Pixabay is selected
-and the minimum is set that high. Either lower it, or ask Pixabay for full API
-access from the link on `pixabay.com/api/docs`.
-
-Pixabay's full-access terms also require that identical requests not be
-repeated within 24 hours, so every API answer — not just Pixabay's — is cached
-under `~/.cache/random-wallpaper/api` for a day and pruned on the next start.
-Only the parsed answer is stored, never the request URL, which carries the key.
-Image downloads are not cached: they go to `~/.cache/random-wallpaper` and live
-or die with your decision.
-
-Unsplash and Pexels are deliberately absent: both forbid wallpaper applications
-in their API guidelines, Pexels naming "wallpaper and image gallery apps" as a
-replication of the service even for personal use.
-
-`~/random_wallpaper` is hardcoded and created on first save. **Saving cannot
-destroy an earlier wallpaper**: downloads live in `~/.cache/random-wallpaper`
-until you accept one, and the save path is uniquified (`-2`, `-3`, …) rather
-than overwritten — the app never opens an existing file for writing. This is
-the one thing iNiR's `random_konachan_wall.sh` got wrong: it wrote every
-download to the same `random_wallpaper.jpg`.
-
-Every save is also hardlinked into `~/Pictures/Wallpapers` — that is the
-directory Noctalia's picker and `wallpaper-random` scan, and `~/random_wallpaper`
-is not. Same filesystem, so the link costs no extra space.
-
-The UI is plain GTK4 with its own stylesheet — no libadwaita, and the provider
-is registered *above* `PRIORITY_USER` so a `~/.config/gtk-4.0/gtk.css` cannot
-repaint it. Icon: `share/icons/hicolor/scalable/apps/dev.ivanc.RandomWallpaper.svg`.
-
-The osu! seasonal-backgrounds endpoint the old script used now returns 403 —
-it moved behind OAuth — so Wallhaven replaced it.
-
-`tests/test-random-wallpaper.py` asserts the non-destructive properties and
-the filter logic against a throwaway `$HOME` — 37 checks, needs network.
+What stays here is the glue: `Ctrl+Alt+W` opens the reel, `Ctrl+Alt+Shift+W`
+opens it on this season or holiday, `Ctrl+Alt+A` toggles the calendar rotation
+(`config.d/90-user-extra.kdl`), the window rule that floats
+`dev.ivanc.RandomWallpaper`, the launcher entry and its icon
+(`share/icons/hicolor/scalable/apps/dev.ivanc.RandomWallpaper.svg`).
 
 ## Bookshelf
 
@@ -426,8 +348,8 @@ A FantLab user id in Профили pulls that account's marks in as already-rea
 books, which is what makes a fresh profile useful immediately: 182 of them
 here, in two pages.
 
-Same GTK4-without-libadwaita build as `random-wallpaper`, with the same
-stylesheet registered above `PRIORITY_USER`. Icon:
+GTK4 without libadwaita, with its stylesheet registered above
+`PRIORITY_USER`. Icon:
 `share/icons/hicolor/scalable/apps/dev.ivanc.Bookshelf.svg`.
 
 `tests/test-bookshelf.py` covers the store, the catalogue rules and every
@@ -511,7 +433,7 @@ What the script does:
   policy banner for "Check for updates" failing on permissions;
 - symlinks **both** `/usr/bin/zen` and `/usr/bin/zen-browser`, since
   `config.d/70-binds.kdl` spawns the latter on `Mod+W`. `/usr/bin` rather than
-  `/usr/local/bin` for the same reason as `random-wallpaper` — a bind or a
+  `/usr/local/bin` for the same reason as `bookshelf` — a bind or a
   desktop entry runs with the launcher's `PATH`, not the shell's;
 - links `share/applications/zen.desktop` into `/usr/share/applications` and
   copies the five icon sizes out of `browser/chrome/icons/default` into
@@ -918,6 +840,8 @@ owns every shortcut and forwards it over IPC. Bind keys here; run
 | `Mod+Slash` | niri hotkey cheatsheet *(was iNiR's own)* |
 | `Alt+Tab` | window switcher |
 | `Ctrl+Alt+W` | random wallpaper previewer *(new)* |
+| `Ctrl+Alt+Shift+W` | the same, opened on this season or holiday *(new)* |
+| `Ctrl+Alt+A` | wallpaper rotation: follow the calendar, or stop *(new)* |
 | `Mod+Shift+F` | focus mode — no gaps, corners, dim or bar (`bin/niri-toggle-gaps`) |
 | `Mod+O` | pin the focused window at full opacity *(new)* |
 | `Mod+Escape` | re-enable binds an app has inhibited |

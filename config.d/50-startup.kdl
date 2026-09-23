@@ -25,6 +25,22 @@ spawn-at-startup "noctalia" "-d"
 spawn-at-startup "bash" "-c" "wl-paste --type text --watch cliphist store &"
 spawn-at-startup "bash" "-c" "wl-paste --type image --watch cliphist store &"
 
+// ── Wallpaper ───────────────────────────────────────────────────────────────
+// One tick of random-wallpaper's calendar rotation at login: the season when
+// it begins, a holiday from a week before to a week after, the season again
+// once that week is over.
+//
+// The systemd timer the app installs (random-wallpaper-auto.timer) does the
+// same job while the session is up, and having both is deliberate, not sloppy —
+// a tick only acts when today's period differs from the one it last applied,
+// so the two cannot fight, and this line covers the seconds before the timer's
+// first run. Nothing here looks at what wallpaper is currently set, so one you
+// chose yourself survives every tick until the calendar moves on.
+//
+// Drop this line, or untick "Follow the calendar" in the app's Filters, to
+// turn the rotation off; the setting is read by both callers.
+spawn-at-startup "/usr/bin/random-wallpaper" "--auto"
+
 // Polkit authentication agent — needed for GUI sudo prompts (software install,
 // disk mount, etc.).
 //
