@@ -68,7 +68,7 @@ Zen is the one that does not come from a package. See
 [Zen Browser](#zen-browser) below.
 
 All helper scripts live in `bin/` and are symlinked into `~/.local/bin`:
-`lock-and-suspend`, `niri-pin-window`, `niri-toggle-gaps`,
+`gcal-add`, `lock-and-suspend`, `niri-pin-window`, `niri-toggle-gaps`,
 `noctalia-telegram-theme` and `wlsunset-restart` (called by
 `lock-and-suspend`). The one with a window and a launcher entry, `bookshelf`,
 goes to `/usr/bin` instead, because a `.desktop` entry is launched with
@@ -248,6 +248,29 @@ opens it on this season or holiday, `Ctrl+Alt+A` toggles the calendar rotation
 (`config.d/90-user-extra.kdl`), the window rule that floats
 `dev.ivanc.RandomWallpaper`, the launcher entry and its icon
 (`share/icons/hicolor/scalable/apps/dev.ivanc.RandomWallpaper.svg`).
+
+## New calendar event
+
+`bin/gcal-add` — `Ctrl+Alt+C`. A small floating form (title, date, all-day,
+start/end, place, notes, which calendar) that adds the event to Google
+Calendar and closes; `Enter` saves, `Esc` cancels. Times accept `9`, `930`,
+`9:30`; an end before the start runs past midnight.
+
+It uses an OAuth client of your own, not noctalia's — noctalia's token is
+refreshed through its proxy and can't be borrowed. The first launch shows the
+setup steps (Desktop-app client in Google Cloud, consent screen published so
+the token doesn't expire in 7 days); the JSON goes to
+`~/.config/gcal-add/client_secret.json`, the refresh token to gnome-keyring.
+
+Reminders come from the same token: `gcal-remind.timer`
+(`share/systemd/user/`) runs `gcal-add --remind` every minute, which reads the
+upcoming events of every calendar ticked in Google Calendar and sends a
+notification when a popup reminder falls due — plus, for every timed event,
+30 and 15 minutes before and as it starts. noctalia's calendar can't be the
+source — its event cache is encrypted with its own key. The client stays in
+"Testing", so Google drops the token after 7 days; a day before that (or as
+soon as it is dead) the tick opens the browser for a fresh sign-in, at most
+once an hour.
 
 ## Bookshelf
 

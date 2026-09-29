@@ -1,0 +1,742 @@
+#!/usr/bin/env python3
+"""gcal-add — a one-shot window that adds an event to Google Calendar.
+
+Opened from a bind (Ctrl+Alt+C in 90-user-extra.kdl), filled in, Enter, gone.
+Esc closes it without saving.
+
+Talks to the Calendar API directly with stdlib urllib, through an OAuth client
+of your own: noctalia's calendar token can't be reused, it belongs to
+noctalia's client and is refreshed through their proxy at api.noctalia.dev.
+
+One-time setup (the window walks through it when the file is missing):
+
+  1. console.cloud.google.com → new project → enable "Google Calendar API".
+  2. OAuth consent screen: External, add yourself as a test user, then
+     *publish* it ("In production") — a client left in "Testing" gets its
+     refresh tokens revoked after 7 days.
+  3. Credentials → Create OAuth client ID → Desktop app → download JSON.
+  4. Pick that JSON in the window; it is copied to
+     ~/.config/gcal-add/client_secret.json.
+
+Reminders: `gcal-add --remind` is one tick of a desktop reminder, run every
+minute by share/systemd/user/gcal-remind.timer. It reads the upcoming events
+of every calendar ticked in Google Calendar and pops a notification when one
+of the event's popup reminders (or the calendar's default ones) comes due.
+noctalia's own calendar can't be read instead: its event cache is encrypted
+with a key from noctalia's keyring entry, in an undocumented format.
+
+The client stays in "Testing", so Google revokes the refresh token 7 days
+after it was issued. The tick starts `gcal-add --login` (browser consent,
+no window) a day before that, or at once if the token is already dead, and
+again at most once an hour until you get through it.
+
+The first save then opens the browser for consent (loopback redirect + PKCE).
+Google shows "this app isn't verified" for an unverified published client —
+Advanced → Go to … (unsafe) is expected; it's your own client. If consent
+fails with invalid_scope, swap calendarlist.readonly for calendar.readonly.
+The refresh token goes to the Secret Service (gnome-keyring), same place
+noctalia keeps its own; nothing secret is written to disk.
+"""
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+gi.require_version("Secret", "1")
+
+import base64
+import datetime as dt
+import hashlib
+import http.server
+import json
+import os
+import secrets
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+from gi.repository import Adw, Gio, GLib, Gtk, Secret
+
+APP_ID = "dev.ivanc.GcalAdd"
+
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "gcal-add"
+CLIENT_FILE = CONFIG_DIR / "client_secret.json"
+STATE_FILE = CONFIG_DIR / "state.json"
+TOKEN_STAMP = CONFIG_DIR / "token-issued"
+REMIND_FILE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "gcal-add" / "remind.json"
+
+TOKEN_LIFETIME = 7 * 86400   # refresh-token life for a client in "Testing"
+RELOGIN_AHEAD = 86400        # ask for a new one this long before it dies
+RELOGIN_COOLDOWN = 3600      # an ignored browser tab is not reopened sooner
+FETCH_EVERY = 300            # the minutely tick re-reads Google this often
+LOOKAHEAD = 8 * 86400        # longest reminder that can still fire on time
+# Fired for every timed event on top of whatever Google has set for it:
+# 30 and 15 minutes before, and the moment it starts.
+ALWAYS_REMIND = [30, 15, 0]
+
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+]
+AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+TOKEN_URL = "https://oauth2.googleapis.com/token"
+API = "https://www.googleapis.com/calendar/v3"
+
+SECRET_SCHEMA = Secret.Schema.new(
+    APP_ID, Secret.SchemaFlags.NONE, {"name": Secret.SchemaAttributeType.STRING}
+)
+SECRET_ATTRS = {"name": "refresh-token"}
+
+
+class AuthError(Exception):
+    """The stored grant is gone or revoked — a fresh consent will fix it."""
+
+
+# ── OAuth ────────────────────────────────────────────────────────────────────
+
+def load_client():
+    data = json.loads(CLIENT_FILE.read_text())
+    return data.get("installed") or data.get("web") or data
+
+
+def post_form(url, fields):
+    body = urllib.parse.urlencode(fields).encode()
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, body), timeout=20) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")
+        if "invalid_grant" in detail:
+            raise AuthError(detail) from e
+        raise RuntimeError(f"{e.code}: {detail}") from e
+
+
+def consent(client, on_browser_opened):
+    """Run the loopback flow; returns the token response. Blocks until done."""
+    verifier = secrets.token_urlsafe(64)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    state = secrets.token_urlsafe(16)
+    result = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            if q.get("state", [""])[0] != state:
+                self.send_response(400)
+                self.end_headers()
+                return
+            result.update({k: v[0] for k, v in q.items()})
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            msg = "Готово, вкладку можно закрыть." if "code" in result else "Доступ не выдан."
+            self.wfile.write(f"<meta charset=utf-8><h2 style='font-family:sans-serif'>{msg}</h2>".encode())
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    server.timeout = 5
+    deadline = time.monotonic() + 300
+    redirect = f"http://127.0.0.1:{server.server_port}"
+    url = AUTH_URL + "?" + urllib.parse.urlencode({
+        "client_id": client["client_id"],
+        "redirect_uri": redirect,
+        "response_type": "code",
+        "scope": " ".join(SCOPES),
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    })
+    on_browser_opened(url)
+    try:
+        # Stray requests (favicon, a wrong state) leave result empty — keep going.
+        while not result:
+            if time.monotonic() > deadline:
+                raise RuntimeError("Не дождался входа в браузере (5 минут).")
+            server.handle_request()
+    finally:
+        server.server_close()
+    if "code" not in result:
+        raise RuntimeError("Google: " + result.get("error", "доступ не выдан"))
+    return post_form(TOKEN_URL, {
+        "client_id": client["client_id"],
+        "client_secret": client.get("client_secret", ""),
+        "code": result["code"],
+        "code_verifier": verifier,
+        "grant_type": "authorization_code",
+        "redirect_uri": redirect,
+    })
+
+
+def stored_refresh_token():
+    return Secret.password_lookup_sync(SECRET_SCHEMA, SECRET_ATTRS, None)
+
+
+def store_refresh_token(token):
+    Secret.password_store_sync(SECRET_SCHEMA, SECRET_ATTRS, Secret.COLLECTION_DEFAULT,
+                               "gcal-add Google refresh token", token, None)
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    TOKEN_STAMP.write_text(str(int(time.time())))
+
+
+def forget_refresh_token():
+    Secret.password_clear_sync(SECRET_SCHEMA, SECRET_ATTRS, None)
+
+
+def access_token(client, open_browser=None):
+    """A fresh access token. Without open_browser it never asks for consent:
+    a missing or revoked grant raises AuthError instead."""
+    refresh = stored_refresh_token()
+    if refresh:
+        try:
+            return post_form(TOKEN_URL, {
+                "client_id": client["client_id"],
+                "client_secret": client.get("client_secret", ""),
+                "refresh_token": refresh,
+                "grant_type": "refresh_token",
+            })["access_token"]
+        except AuthError:
+            forget_refresh_token()
+    if open_browser is None:
+        raise AuthError("нужен вход в Google")
+    tok = consent(client, open_browser)
+    if tok.get("refresh_token"):
+        store_refresh_token(tok["refresh_token"])
+    return tok["access_token"]
+
+
+def api(token, method, path, body=None):
+    req = urllib.request.Request(
+        API + path, method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")
+        try:
+            detail = json.loads(detail)["error"]["message"]
+        except (ValueError, KeyError, TypeError):
+            pass
+        raise RuntimeError(f"Calendar API {e.code}: {detail}") from e
+
+
+# ── Form helpers ─────────────────────────────────────────────────────────────
+
+def parse_time(text):
+    """'9', '930', '9:30', '9.30', '09 30' → (9, 30); None if unreadable."""
+    t = text.strip().replace(".", ":").replace(" ", ":").replace("-", ":")
+    if ":" in t:
+        h, _, m = t.partition(":")
+    elif len(t) in (3, 4):
+        h, m = t[:-2], t[-2:]
+    else:
+        h, m = t, "0"
+    try:
+        h, m = int(h), int(m or 0)
+    except ValueError:
+        return None
+    return (h, m) if 0 <= h < 24 and 0 <= m < 60 else None
+
+
+def load_state():
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(json.dumps(state))
+
+
+def notify(summary, body=""):
+    # Waited for: the reminder tick is a systemd oneshot, and whatever it
+    # leaves running when it exits is killed with it.
+    if shutil.which("notify-send"):
+        subprocess.run(["notify-send", "-a", "Google Calendar", "-i", "x-office-calendar", summary, body],
+                       timeout=5, check=False)
+
+
+# ── Window ───────────────────────────────────────────────────────────────────
+
+class Window(Adw.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title="Новое событие", default_width=460)
+        self.state = load_state()
+        self.token = None
+        self.token_lock = threading.Lock()
+        self.calendars = []
+
+        esc = Gtk.ShortcutController()
+        esc.add_shortcut(Gtk.Shortcut.new(
+            Gtk.ShortcutTrigger.parse_string("Escape"),
+            Gtk.CallbackAction.new(lambda *a: self.close() or True)))
+        self.add_controller(esc)
+
+        self.toasts = Adw.ToastOverlay()
+        view = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+        self.save_btn = Gtk.Button(label="Добавить")
+        self.save_btn.add_css_class("suggested-action")
+        self.save_btn.connect("clicked", lambda *_: self.save())
+        header.pack_end(self.save_btn)
+        self.spinner = Gtk.Spinner()
+        header.pack_end(self.spinner)
+        view.add_top_bar(header)
+
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
+        self.stack.add_named(self.build_form(), "form")
+        self.stack.add_named(self.build_setup(), "setup")
+        view.set_content(self.stack)
+        self.toasts.set_child(view)
+        self.set_content(self.toasts)
+
+        if CLIENT_FILE.exists():
+            self.show_form()
+        else:
+            self.stack.set_visible_child_name("setup")
+            self.save_btn.set_visible(False)
+
+    # — form —
+
+    def build_form(self):
+        now = dt.datetime.now()
+        start = (now + dt.timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+        self.date = start.date()
+
+        page = Adw.PreferencesPage()
+        main = Adw.PreferencesGroup()
+        page.add(main)
+
+        self.title = Adw.EntryRow(title="Название")
+        self.title.connect("entry-activated", lambda *_: self.save())
+        main.add(self.title)
+
+        self.date_row = Adw.ActionRow(title="Дата")
+        cal = Gtk.Calendar()
+        cal.set_date(GLib.DateTime.new_local(self.date.year, self.date.month, self.date.day, 0, 0, 0))
+        cal.connect("day-selected", self.on_day)
+        pop = Gtk.Popover(child=cal)
+        self.date_btn = Gtk.MenuButton(popover=pop, valign=Gtk.Align.CENTER)
+        self.date_btn.add_css_class("flat")
+        self.date_row.add_suffix(self.date_btn)
+        self.date_row.set_activatable_widget(self.date_btn)
+        main.add(self.date_row)
+        self.update_date_label()
+
+        self.allday = Adw.SwitchRow(title="Весь день")
+        self.allday.connect("notify::active", lambda *_: self.sync_allday())
+        main.add(self.allday)
+
+        self.start = self.time_row("Начало", start.strftime("%H:%M"))
+        self.end = self.time_row("Конец", (start + dt.timedelta(hours=1)).strftime("%H:%M"))
+        main.add(self.start)
+        main.add(self.end)
+
+        extra = Adw.PreferencesGroup()
+        page.add(extra)
+        self.location = Adw.EntryRow(title="Место")
+        self.location.connect("entry-activated", lambda *_: self.save())
+        extra.add(self.location)
+        self.desc = Adw.EntryRow(title="Описание")
+        self.desc.connect("entry-activated", lambda *_: self.save())
+        extra.add(self.desc)
+
+        self.cal_model = Gtk.StringList.new(["Основной"])
+        self.cal_row = Adw.ComboRow(title="Календарь", model=self.cal_model)
+        extra.add(self.cal_row)
+        return page
+
+    def time_row(self, title, text):
+        row = Adw.EntryRow(title=title, text=text, input_purpose=Gtk.InputPurpose.DIGITS)
+        row.connect("entry-activated", lambda *_: self.save())
+        row.connect("changed", lambda r: r.remove_css_class("error"))
+        return row
+
+    def on_day(self, cal):
+        d = cal.get_date()
+        self.date = dt.date(d.get_year(), d.get_month(), d.get_day_of_month())
+        self.update_date_label()
+        self.date_btn.popdown()
+
+    def update_date_label(self):
+        today = dt.date.today()
+        rel = {0: "сегодня", 1: "завтра", 2: "послезавтра"}.get((self.date - today).days)
+        months = "января февраля марта апреля мая июня июля августа сентября октября ноября декабря".split()
+        wd = "пн вт ср чт пт сб вс".split()[self.date.weekday()]
+        label = f"{self.date.day} {months[self.date.month - 1]}, {wd}"
+        self.date_btn.set_label(f"{label} · {rel}" if rel else label)
+
+    def sync_allday(self):
+        on = self.allday.get_active()
+        self.start.set_visible(not on)
+        self.end.set_visible(not on)
+
+    def show_form(self):
+        self.stack.set_visible_child_name("form")
+        self.save_btn.set_visible(True)
+        self.title.grab_focus()
+        # Fill the calendar list only if we're already signed in — the first
+        # consent waits for the first save, so opening the window never
+        # throws a browser at you.
+        if stored_refresh_token():
+            self.run(self.fetch_calendars, self.on_calendars, quiet=True)
+
+    # — setup —
+
+    def build_setup(self):
+        page = Adw.StatusPage(
+            icon_name="x-office-calendar-symbolic",
+            title="Нужен OAuth-клиент Google",
+            description=(
+                "1. <a href='https://console.cloud.google.com/apis/library/calendar-json.googleapis.com'>"
+                "Включи Google Calendar API</a> в новом проекте.\n"
+                "2. <a href='https://console.cloud.google.com/auth/audience'>Экран согласия</a>: "
+                "External, добавь себя в тестовые пользователи и нажми «Publish app» — "
+                "иначе токен протухает через 7 дней.\n"
+                "3. <a href='https://console.cloud.google.com/auth/clients'>Clients</a> → "
+                "Create client → Desktop app → скачай JSON.\n"
+                "4. Выбери этот файл ниже.\n"
+                "При первом сохранении Google скажет «приложение не проверено» — "
+                "это твой же клиент: Дополнительно → Перейти."
+            ),
+        )
+        btn = Gtk.Button(label="Выбрать client_secret.json", halign=Gtk.Align.CENTER)
+        btn.add_css_class("pill")
+        btn.add_css_class("suggested-action")
+        btn.connect("clicked", self.pick_client)
+        page.set_child(btn)
+        return page
+
+    def pick_client(self, *_):
+        f = Gtk.FileFilter(name="JSON")
+        f.add_pattern("*.json")
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(f)
+        dlg = Gtk.FileDialog(title="client_secret.json", filters=filters,
+                             initial_folder=Gio.File.new_for_path(str(Path.home() / "Downloads")))
+        dlg.open(self, None, self.on_client_picked)
+
+    def on_client_picked(self, dlg, res):
+        try:
+            path = dlg.open_finish(res).get_path()
+            data = json.loads(Path(path).read_text())
+            if "client_id" not in (data.get("installed") or data.get("web") or data):
+                raise ValueError("в файле нет client_id")
+        except GLib.Error:
+            return  # cancelled
+        except (OSError, ValueError) as e:
+            self.toast(f"Не тот файл: {e}")
+            return
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, CLIENT_FILE)
+        CLIENT_FILE.chmod(0o600)
+        self.show_form()
+
+    # — background work —
+
+    def run(self, work, done, quiet=False):
+        """work() in a thread; done(result) back on the main loop."""
+        self.spinner.start()
+
+        def thread():
+            try:
+                res, err = work(), None
+            except Exception as e:  # noqa: BLE001 — shown to the user
+                res, err = None, e
+            GLib.idle_add(finish, res, err)
+
+        def finish(res, err):
+            self.spinner.stop()
+            if err is None:
+                done(res)
+            else:
+                self.save_btn.set_sensitive(True)
+                if not quiet:
+                    self.toast(str(err))
+            return False
+
+        threading.Thread(target=thread, daemon=True).start()
+
+    def ensure_token(self, interactive=True):
+        # Only save() may open the browser; the quiet calendar fetch on open
+        # must not, even when the stored grant turns out to be revoked.
+        with self.token_lock:
+            if self.token is None:
+                self.token = access_token(load_client(), self.open_browser if interactive else None)
+            return self.token
+
+    def open_browser(self, url):
+        def show():
+            self.toast("Войди в Google в браузере…")
+            Gio.AppInfo.launch_default_for_uri(url, None)
+            return False
+        GLib.idle_add(show)
+
+    def fetch_calendars(self):
+        token = self.ensure_token(interactive=False)
+        items = api(token, "GET", "/users/me/calendarList?minAccessRole=writer")["items"]
+        items.sort(key=lambda c: (not c.get("primary"), c.get("summaryOverride") or c["summary"]))
+        return items
+
+    def on_calendars(self, items):
+        self.calendars = items
+        names = [c.get("summaryOverride") or c["summary"] for c in items]
+        self.cal_model.splice(0, self.cal_model.get_n_items(), names)
+        last = self.state.get("calendar")
+        for i, c in enumerate(items):
+            if c["id"] == last:
+                self.cal_row.set_selected(i)
+
+    def calendar_id(self):
+        i = self.cal_row.get_selected()
+        return self.calendars[i]["id"] if i < len(self.calendars) else "primary"
+
+    # — save —
+
+    def build_event(self):
+        summary = self.title.get_text().strip()
+        if not summary:
+            self.title.add_css_class("error")
+            self.title.grab_focus()
+            return None
+        ev = {"summary": summary}
+        if self.location.get_text().strip():
+            ev["location"] = self.location.get_text().strip()
+        if self.desc.get_text().strip():
+            ev["description"] = self.desc.get_text().strip()
+
+        if self.allday.get_active():
+            ev["start"] = {"date": self.date.isoformat()}
+            ev["end"] = {"date": (self.date + dt.timedelta(days=1)).isoformat()}
+            return ev
+
+        s, e = parse_time(self.start.get_text()), parse_time(self.end.get_text())
+        for row, val in ((self.start, s), (self.end, e)):
+            if val is None:
+                row.add_css_class("error")
+                row.grab_focus()
+                return None
+        start = dt.datetime.combine(self.date, dt.time(*s)).astimezone()
+        end = dt.datetime.combine(self.date, dt.time(*e)).astimezone()
+        if end <= start:  # 23:00–01:00 runs past midnight
+            end += dt.timedelta(days=1)
+        ev["start"] = {"dateTime": start.isoformat()}
+        ev["end"] = {"dateTime": end.isoformat()}
+        return ev
+
+    def save(self):
+        if not self.save_btn.get_visible() or not self.save_btn.get_sensitive():
+            return
+        ev = self.build_event()
+        if ev is None:
+            return
+        self.save_btn.set_sensitive(False)
+        cal = self.calendar_id()
+
+        self.run(lambda: api(self.ensure_token(), "POST",
+                             f"/calendars/{urllib.parse.quote(cal)}/events", ev),
+                 self.on_saved)
+
+    def on_saved(self, res):
+        if self.calendars:
+            self.state["calendar"] = self.calendar_id()
+            save_state(self.state)
+        when = self.date_btn.get_label()
+        if not self.allday.get_active():
+            when += f", {self.start.get_text()}–{self.end.get_text()}"
+        notify(f"Добавлено: {res.get('summary', '')}", when)
+        self.close()
+
+    def toast(self, text):
+        self.toasts.add_toast(Adw.Toast(title=GLib.markup_escape_text(text), timeout=6))
+        return False
+
+
+class App(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID)
+
+    def do_activate(self):
+        win = self.get_active_window() or Window(self)
+        win.present()
+
+
+# ── Headless: login and reminders ────────────────────────────────────────────
+
+def open_uri(url):
+    subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def login():
+    """Browser consent with no window — what the reminder tick starts."""
+    notify("Google Calendar: нужен повторный вход",
+           "Открыл браузер. Google отзывает токен тестового клиента раз в 7 дней.")
+    try:
+        tok = consent(load_client(), open_uri)
+    except Exception as e:  # noqa: BLE001 — surfaced as a notification
+        notify("Google Calendar: вход не удался", str(e))
+        return 1
+    if tok.get("refresh_token"):
+        store_refresh_token(tok["refresh_token"])
+    notify("Google Calendar: вход выполнен", "Напоминания снова работают.")
+    return 0
+
+
+def start_login(state):
+    """Start `--login` outside this oneshot's cgroup (systemd would kill a
+    plain child when the tick exits). The fixed unit name doubles as a lock."""
+    if time.time() - state.get("prompted_at", 0) < RELOGIN_COOLDOWN:
+        return
+    state["prompted_at"] = time.time()
+    subprocess.run(["systemd-run", "--user", "--quiet", "--collect", "--unit=gcal-add-login",
+                    os.path.realpath(__file__), "--login"],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def token_age():
+    try:
+        return time.time() - int(TOKEN_STAMP.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def fetch_upcoming(token):
+    """Upcoming events of every calendar shown in Google Calendar, reduced to
+    what a reminder needs."""
+    now = dt.datetime.now(dt.timezone.utc)
+    cals = api(token, "GET", "/users/me/calendarList")["items"]
+    events = []
+    for cal in cals:
+        if not cal.get("selected") or cal.get("deleted"):
+            continue
+        defaults = [r["minutes"] for r in cal.get("defaultReminders", []) if r.get("method") == "popup"]
+        q = urllib.parse.urlencode({
+            "timeMin": (now - dt.timedelta(minutes=1)).isoformat(),
+            "timeMax": (now + dt.timedelta(seconds=LOOKAHEAD)).isoformat(),
+            "singleEvents": "true", "orderBy": "startTime", "maxResults": 250,
+        })
+        items = api(token, "GET", f"/calendars/{urllib.parse.quote(cal['id'])}/events?{q}").get("items", [])
+        for ev in items:
+            if ev.get("status") == "cancelled":
+                continue
+            if any(a.get("self") and a.get("responseStatus") == "declined" for a in ev.get("attendees", [])):
+                continue
+            rem = ev.get("reminders", {})
+            minutes = defaults if rem.get("useDefault", True) else \
+                [r["minutes"] for r in rem.get("overrides", []) if r.get("method") == "popup"]
+            if "dateTime" in ev["start"]:
+                minutes = sorted(set(minutes) | set(ALWAYS_REMIND), reverse=True)
+            if not minutes:
+                continue
+            start, end = ev["start"], ev.get("end", {})
+            events.append({
+                "id": ev["id"],
+                "summary": ev.get("summary", "(без названия)"),
+                "location": ev.get("location", ""),
+                "start": start.get("dateTime") or start["date"],
+                "end": end.get("dateTime") or end.get("date", ""),
+                "allday": "dateTime" not in start,
+                "minutes": minutes,
+            })
+    return events
+
+
+def event_start(ev):
+    if ev["allday"]:  # all-day reminders count back from local midnight
+        return dt.datetime.combine(dt.date.fromisoformat(ev["start"]), dt.time()).astimezone()
+    return dt.datetime.fromisoformat(ev["start"]).astimezone()
+
+
+def remind_text(ev, start, now):
+    left = round((start - now).total_seconds() / 60)
+    if left <= 0:
+        rel = "сейчас"
+    elif left < 60:
+        rel = f"через {left} мин"
+    elif left < 24 * 60:
+        h, m = divmod(left, 60)
+        rel = f"через {h} ч" + (f" {m} мин" if m else "")
+    else:
+        rel = f"через {round(left / 1440)} дн"
+    if ev["allday"]:
+        when = start.strftime("%d.%m, весь день")
+    else:
+        when = start.strftime("%H:%M")
+        if ev["end"]:
+            when += "–" + dt.datetime.fromisoformat(ev["end"]).astimezone().strftime("%H:%M")
+        if start.date() != now.date():
+            when = start.strftime("%d.%m ") + when
+    parts = [rel, when] + ([ev["location"]] if ev["location"] else [])
+    return " · ".join(parts)
+
+
+def remind():
+    """One minutely tick. Never raises for network trouble: the cached list
+    keeps reminders firing while Google is unreachable or the token is dead."""
+    if not CLIENT_FILE.exists():
+        return 0
+    try:
+        state = json.loads(REMIND_FILE.read_text())
+    except (OSError, ValueError):
+        state = {}
+    now_ts = time.time()
+
+    age = token_age()
+    if age is None and stored_refresh_token():
+        # A token from before the stamp existed: it can only be younger than
+        # now, so dating it now errs toward asking a little early.
+        TOKEN_STAMP.write_text(str(int(now_ts)))
+        age = 0
+    if stored_refresh_token() is None or (age is not None and age > TOKEN_LIFETIME - RELOGIN_AHEAD):
+        start_login(state)
+
+    if now_ts - state.get("fetched_at", 0) >= FETCH_EVERY and stored_refresh_token():
+        try:
+            state["events"] = fetch_upcoming(access_token(load_client()))
+            state["fetched_at"] = now_ts
+        except AuthError:
+            start_login(state)
+        except (OSError, RuntimeError, KeyError, ValueError) as e:
+            print(f"gcal-add: fetch failed: {e}", file=sys.stderr)
+
+    now = dt.datetime.now().astimezone()
+    fired = state.get("fired", {})
+    for ev in state.get("events", []):
+        start = event_start(ev)
+        # Due, and the event began less than 5 minutes ago — grace for a tick
+        # held up by a slow fetch. A reminder missed while asleep still fires
+        # if there's time left.
+        # Several due at once (waking up past both the 1 h and the 10 min
+        # one) make a single notification.
+        due = [f"{ev['id']}|{ev['start']}|{m}" for m in ev["minutes"]
+               if start - dt.timedelta(minutes=m) <= now < start + dt.timedelta(minutes=5)]
+        fresh = [k for k in due if k not in fired]
+        if fresh:
+            notify(ev["summary"], remind_text(ev, start, now))
+            fired.update(dict.fromkeys(fresh, now_ts))
+    state["fired"] = {k: t for k, t in fired.items() if now_ts - t < LOOKAHEAD + 86400}
+
+    REMIND_FILE.parent.mkdir(parents=True, exist_ok=True)
+    REMIND_FILE.write_text(json.dumps(state, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    if "--remind" in sys.argv:
+        sys.exit(remind())
+    if "--login" in sys.argv:
+        sys.exit(login())
+    sys.exit(App().run(sys.argv))

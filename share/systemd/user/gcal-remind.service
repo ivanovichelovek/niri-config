@@ -1,0 +1,10 @@
+# One tick of the Google Calendar reminders — see bin/gcal-add.
+[Unit]
+Description=Google Calendar reminders (gcal-add)
+After=graphical-session.target
+PartOf=graphical-session.target
+ConditionPathExists=%h/.config/gcal-add/client_secret.json
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/gcal-add --remind

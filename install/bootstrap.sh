@@ -576,6 +576,9 @@ PKGS=(
     # CLI, which bootstrap does not install: it wants a logged-in
     # subscription, not a package.
     python-gobject gtk4 librsvg
+    # bin/gcal-add (Ctrl+Alt+C): libadwaita form, refresh token in the
+    # Secret Service through libsecret.
+    libadwaita libsecret
     # random-wallpaper is installed with `uv tool install` in the config step;
     # uv brings its Qt (PySide6) and, if need be, its Python along.
     uv
@@ -881,7 +884,7 @@ else
         info "$NIRI_CFG -> $REPO_ROOT"
 
         for s in lock-and-suspend niri-toggle-gaps wlsunset-restart \
-                 claude-state noctalia-telegram-theme \
+                 claude-state noctalia-telegram-theme gcal-add \
                  unar-here fix-legacy-names filemanager1-dispatch; do
             as_user ln -sf "$REPO_ROOT/bin/$s" "$USER_HOME/.local/bin/$s"
         done
@@ -998,6 +1001,17 @@ else
                 || TODO+=("random-wallpaper --install-timer (the timer is not enabled yet)")
             info "seasonal wallpaper timer installed into ~/.config/systemd/user"
         fi
+
+        # gcal-add's minutely reminder tick. Linked, not copied, like the
+        # helpers; the service is a no-op until client_secret.json exists, so
+        # enabling it on a fresh machine costs nothing.
+        as_user mkdir -p "$USER_HOME/.config/systemd/user"
+        for u in gcal-remind.service gcal-remind.timer; do
+            as_user ln -sf "$REPO_ROOT/share/systemd/user/$u" "$USER_HOME/.config/systemd/user/$u"
+        done
+        as_user systemctl --user enable gcal-remind.timer 2>/dev/null \
+            || TODO+=("systemctl --user enable gcal-remind.timer")
+        info "calendar reminder timer linked into ~/.config/systemd/user"
 
         ICON_DIR="$USER_HOME/.local/share/icons/hicolor/scalable/apps"
         as_user mkdir -p "$ICON_DIR"

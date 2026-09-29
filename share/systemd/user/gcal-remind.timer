@@ -1,0 +1,11 @@
+# Minutely, so a reminder lands within a minute of when it is due.
+[Unit]
+Description=Minutely Google Calendar reminder check
+
+[Timer]
+OnStartupSec=1min
+OnCalendar=minutely
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
