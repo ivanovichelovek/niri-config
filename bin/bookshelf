@@ -2466,30 +2466,45 @@ class Bookshelf(Gtk.ApplicationWindow):
                 GLib.idle_add(self._finish_run, [], error)
                 return
             GLib.idle_add(self._log, "Пришло названий: %d. Проверяю по каталогам…" % len(books))
-            resolved = []
-            for number, item in enumerate(books):
-                GLib.idle_add(self.busy, item["title"][:40], number, len(books))
-                if self.run_job.cancelled:
-                    break
-                if self.profile.knows(item["title"], item["author"]):
-                    GLib.idle_add(self._log, "  %s — уже на полке, пропускаю" % item["title"])
-                    continue
-                facts = resolve(item["title"], item["author"], item["lang"],
-                                self.profile.data.get("google_books_key", ""))
-                book = dict(item)
-                book.update(catalogued(item, facts))
-                resolved.append(book)
-                GLib.idle_add(self._log, "  %s — %s" % (
-                    item["title"],
-                    "%s, оценка %s" % (facts["source"], facts.get("public_rating") or "—")
-                    if facts["verified"] else "НЕ НАЙДЕНО в каталогах, помечаю как непроверенное"))
-                book["id"] = uuid.uuid4().hex[:12]
-                cover_path(book)
-            GLib.idle_add(self._finish_run, resolved, "")
+            # Each book goes on the shelf the moment it is checked: the catalogues
+            # are slow and flaky, and a dropped connection halfway through must
+            # not cost the books that were already confirmed.
+            shelved = []
+            try:
+                for number, item in enumerate(books):
+                    GLib.idle_add(self.busy, item["title"][:40], number, len(books))
+                    if self.run_job.cancelled:
+                        break
+                    if self.profile.knows(item["title"], item["author"]) or any(
+                            (norm(b["title"]), surname(b["author"]))
+                            == (norm(item["title"]), surname(item["author"])) for b in shelved):
+                        GLib.idle_add(self._log, "  %s — уже на полке, пропускаю" % item["title"])
+                        continue
+                    facts = resolve(item["title"], item["author"], item["lang"],
+                                    self.profile.data.get("google_books_key", ""))
+                    book = dict(item)
+                    book.update(catalogued(item, facts))
+                    GLib.idle_add(self._log, "  %s — %s" % (
+                        item["title"],
+                        "%s, оценка %s" % (facts["source"], facts.get("public_rating") or "—")
+                        if facts["verified"] else "НЕ НАЙДЕНО в каталогах, помечаю как непроверенное"))
+                    book["id"] = uuid.uuid4().hex[:12]
+                    cover_path(book)
+                    shelved.append(book)
+                    GLib.idle_add(self._shelve, book)
+            except Exception as exc:
+                error = "проверка оборвалась — %s" % exc
+            GLib.idle_add(self._finish_run, shelved, error)
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _shelve(self, book):
+        self.profile.add(book)
+        self.save_and_refresh()
+        return False
+
     def _finish_run(self, books, error):
+        """Close the run. The books themselves are already on the shelf."""
         job, self.run_job = self.run_job, None
         self.busy()
         self.go_btn.set_sensitive(True)
@@ -2497,14 +2512,11 @@ class Bookshelf(Gtk.ApplicationWindow):
 
         if error:
             self._log("Ошибка: " + error)
-            return
-        if job and job.cancelled:
+        elif job and job.cancelled:
             self._log("Отменено.")
+        if not books:
             return
 
-        for book in books:
-            saved = self.profile.add(book)
-            threading.Thread(target=cover_path, args=(saved,), daemon=True).start()
         buf = self.ask.get_buffer()
         self.profile.data.setdefault("runs", []).append({
             "ts": time.strftime("%Y-%m-%d %H:%M"),

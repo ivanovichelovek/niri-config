@@ -423,6 +423,33 @@ def widget_checks(app):
     check("the run is written to the history", len(shelf.data.get("runs", [])) == 1)
     check("the picker switches to the shelf", win.stack.get_visible_child_name() == "shelf")
 
+    # A connection that drops halfway must not take the checked books with it
+    class TwoBooks(InstantJob):
+        def run(self):
+            return [{"title": "Успела", "author": "Первый автор", "lang": "ru", "why": ""},
+                    {"title": "Оборвалась", "author": "Второй автор", "lang": "ru", "why": ""}], ""
+
+    stub_resolve = bs.resolve
+
+    def flaky_resolve(title, author, lang, key=""):
+        if title == "Оборвалась":
+            raise OSError("connection reset")
+        return stub_resolve(title, author, lang, key)
+
+    bs.ClaudeRun, bs.resolve = TwoBooks, flaky_resolve
+    win._start_run()
+    deadline = time.time() + 20
+    while win.run_job is not None and time.time() < deadline:
+        while GLib.MainContext.default().pending():
+            GLib.MainContext.default().iteration(False)
+        time.sleep(0.05)
+    bs.ClaudeRun, bs.resolve = InstantJob, stub_resolve
+    on_disk = json.loads(shelf.path.read_text("utf-8"))["books"]
+    check("a dropped connection still ends the run", win.go_btn.get_sensitive())
+    check("books checked before the drop stay on the shelf",
+          any(b["title"] == "Успела" for b in on_disk))
+    check("the book that broke is not shelved", not shelf.knows("Оборвалась", "Второй автор"))
+
     win._cancel_run()                                             # nothing running: must not raise
     check("Отменить on an idle picker is harmless", win.run_job is None)
 
