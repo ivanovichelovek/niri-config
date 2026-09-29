@@ -51,9 +51,10 @@ window-rule {
     open-maximized true
 }
 
-// nvim opens kitty with --class nvim, so app-id is "nvim"
+// zed — main code/text editor; app-id matches dev.zed.Zed.desktop
+// (Preview build is dev.zed.Zed-Preview).
 window-rule {
-    match app-id="nvim"
+    match app-id=r#"^dev\.zed\.Zed(-Preview)?$"#
     open-on-workspace "code"
     open-maximized true
 }
