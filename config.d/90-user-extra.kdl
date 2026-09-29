@@ -19,6 +19,7 @@ workspace "chat"
 workspace "code"
 workspace "music"
 workspace "vpn"
+workspace "mail"
 //
 // Per-app workspace assignment
 
@@ -71,6 +72,16 @@ window-rule {
     open-on-workspace "vpn"
     open-maximized true
 }
+
+// mail (thunderbird) — 7th workspace, started at login. Compose and OAuth
+// windows share the app-id, so they land here too.
+window-rule {
+    match app-id="org.mozilla.Thunderbird"
+    open-on-workspace "mail"
+    open-maximized true
+}
+
+spawn-at-startup "thunderbird"
 
 // VirtualBox: open manager and VM windows maximized.
 // Matches both "VirtualBox Manager" and "VirtualBox Machine".
