@@ -139,10 +139,12 @@ window-rule {
     open-floating true
 }
 
-// The random wallpaper previewer is a dialog, not a workspace app.
+// The random wallpaper reel opens in the tiling grid like any other app —
+// it has three tabs and stays open, not a dialog to dismiss. Mod+A floats it
+// when wanted.
 window-rule {
     match app-id="dev.ivanc.RandomWallpaper"
-    open-floating true
+    open-floating false
 }
 
 //   window-rule {

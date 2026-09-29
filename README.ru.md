@@ -255,7 +255,7 @@ layer-shell-клиент и окнами не управляет.
 Здесь остаётся только обвязка: `Ctrl+Alt+W` открывает ленту, `Ctrl+Alt+Shift+W`
 — её же на текущем времени года или празднике, `Ctrl+Alt+A` включает и
 выключает смену по календарю (`config.d/90-user-extra.kdl`), правило окна,
-делающее `dev.ivanc.RandomWallpaper` плавающим, пункт лаунчера и его иконка
+открывающее `dev.ivanc.RandomWallpaper` в сетке тайлинга, пункт лаунчера и его иконка
 (`share/icons/hicolor/scalable/apps/dev.ivanc.RandomWallpaper.svg`).
 
 ## Новое событие в календаре

@@ -245,8 +245,8 @@ installs it, without asking:
 
 What stays here is the glue: `Ctrl+Alt+W` opens the reel, `Ctrl+Alt+Shift+W`
 opens it on this season or holiday, `Ctrl+Alt+A` toggles the calendar rotation
-(`config.d/90-user-extra.kdl`), the window rule that floats
-`dev.ivanc.RandomWallpaper`, the launcher entry and its icon
+(`config.d/90-user-extra.kdl`), the window rule that opens
+`dev.ivanc.RandomWallpaper` in the tiling grid, the launcher entry and its icon
 (`share/icons/hicolor/scalable/apps/dev.ivanc.RandomWallpaper.svg`).
 
 ## New calendar event
